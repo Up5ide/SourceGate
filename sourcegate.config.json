@@ -1,6 +1,14 @@
 {
   "policy": {
     "minimum_days_since_latest_release": 3,
-    "dormant_release_threshold_days": 180
+    "dormant_release_threshold_days": 180,
+    "protected_packages": {
+      "npm": ["react", "lodash", "@tanstack/react-query"],
+      "pypi": ["requests", "django"]
+    },
+    "protected_tokens": {
+      "npm": ["tanstack", "aws", "babel"],
+      "pypi": ["django", "pytest"]
+    }
   }
 }

@@ -1,4 +1,17 @@
-package sourcegate
+package report
+
+type Decision string
+
+const (
+	DecisionInspectOnly Decision = "INSPECT_ONLY"
+	DecisionAllow       Decision = "ALLOW"
+	DecisionBlock       Decision = "BLOCK"
+)
+
+type Finding struct {
+	Severity string
+	Message  string
+}
 
 type PackageReport struct {
 	Ecosystem           string

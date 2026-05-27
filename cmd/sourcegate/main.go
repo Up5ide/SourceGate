@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/sourcegate/sourcegate/internal/sourcegate"
+	"github.com/sourcegate/sourcegate/internal/app"
 )
 
 func main() {
@@ -15,9 +15,9 @@ func main() {
 	defer cancel()
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	app := sourcegate.NewApp(client, os.Stdout, os.Stderr)
+	sourcegate := app.New(client, os.Stdout, os.Stderr)
 
-	if err := app.Run(ctx, os.Args[1:]); err != nil {
+	if err := sourcegate.Run(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

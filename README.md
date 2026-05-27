@@ -4,9 +4,9 @@ SourceGate is a security-first Go CLI that sits in front of package managers and
 
 The long-term goal is to become a local, policy-driven enforcement layer for software supply-chain risk. SourceGate should help developers and CI systems identify risky packages, explain the reasons clearly, and eventually allow, warn, or block installation based on deterministic policy.
 
-## Version 0.2 Scope
+## Version 0.3 Scope
 
-Version 0.2 is intentionally small.
+Version 0.3 is intentionally small.
 
 The first milestone does not install packages, download package archives, or invoke the real package manager. Instead, it accepts familiar install-shaped commands and fetches public registry metadata for the requested package.
 
@@ -67,6 +67,8 @@ Supported behavior:
 - Read local policy from `sourcegate.config.json`.
 - Block packages whose latest registry release is newer than the configured minimum age.
 - Block packages whose latest release follows a long configured period of package inactivity.
+- Alert on obvious typosquatting against configured protected package names.
+- Alert on boundary-separated use of configured protected brand or organization tokens.
 - Exit without installing the package.
 - Avoid invoking `npm`, `pip`, or any package lifecycle hooks.
 
@@ -82,7 +84,15 @@ Current configuration:
 {
   "policy": {
     "minimum_days_since_latest_release": 3,
-    "dormant_release_threshold_days": 180
+    "dormant_release_threshold_days": 180,
+    "protected_packages": {
+      "npm": ["react", "lodash", "@tanstack/react-query"],
+      "pypi": ["requests", "django"]
+    },
+    "protected_tokens": {
+      "npm": ["tanstack", "aws", "babel"],
+      "pypi": ["django", "pytest"]
+    }
   }
 }
 ```
@@ -93,7 +103,34 @@ This is intended to reduce exposure to fast-moving compromise windows where an a
 
 `dormant_release_threshold_days` blocks packages when the latest release follows a long period of inactivity. For example, `180` means a package is blocked when the previous release was at least 180 days before the latest release.
 
-In version 0.2 these checks use registry publish time, not upstream Git commit time. Repository commit analysis is planned for a later version.
+`protected_packages` alerts on one-edit lookalikes of configured package names. Exact matches do not create findings.
+
+`protected_tokens` alerts when a package uses a protected token as a separated name part, such as `tanstack-query-utils`. It does not alert on embedded strings such as `mytanstackhelper`.
+
+In version 0.3 release-age checks use registry publish time, not upstream Git commit time. Repository commit analysis is planned for a later version.
+
+## Code Structure
+
+SourceGate is organized around Go packages. A Go module is the whole repository defined by `go.mod`; a package is a folder of `.go` files compiled together.
+
+Current layout:
+
+```text
+cmd/sourcegate/          CLI entrypoint
+internal/app/            Application orchestration
+internal/cli/            Command parsing
+internal/config/         Config schema, loading, and validation
+internal/report/         Shared report, finding, and decision types
+internal/ecosystem/      Shared ecosystem constants and adapter interface
+internal/ecosystem/npm/  npm registry metadata client
+internal/ecosystem/pypi/ PyPI registry metadata client
+internal/checks/         Policy runner
+internal/checks/*/       Individual risk checks
+internal/output/         Human-readable output rendering
+internal/text/           Small shared text helpers
+```
+
+Tests live next to the package they cover using Go's `*_test.go` convention. There is no top-level `tests` folder.
 
 ## Planned Next
 

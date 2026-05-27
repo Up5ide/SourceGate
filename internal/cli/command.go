@@ -1,19 +1,14 @@
-package sourcegate
+package cli
 
 import (
 	"fmt"
 	"strings"
-)
 
-type Ecosystem string
-
-const (
-	EcosystemNPM  Ecosystem = "npm"
-	EcosystemPyPI Ecosystem = "pypi"
+	"github.com/sourcegate/sourcegate/internal/ecosystem"
 )
 
 type InstallRequest struct {
-	Ecosystem Ecosystem
+	Ecosystem ecosystem.Ecosystem
 	Manager   string
 	Command   string
 	Package   string
@@ -41,14 +36,14 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 	switch manager {
 	case "npm":
 		return InstallRequest{
-			Ecosystem: EcosystemNPM,
+			Ecosystem: ecosystem.NPM,
 			Manager:   manager,
 			Command:   command,
 			Package:   pkg,
 		}, nil
 	case "pip":
 		return InstallRequest{
-			Ecosystem: EcosystemPyPI,
+			Ecosystem: ecosystem.PyPI,
 			Manager:   manager,
 			Command:   command,
 			Package:   pkg,

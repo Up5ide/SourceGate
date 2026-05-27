@@ -1,4 +1,4 @@
-package sourcegate
+package pypi
 
 import (
 	"context"
@@ -7,17 +7,28 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+
+	"github.com/sourcegate/sourcegate/internal/report"
+	"github.com/sourcegate/sourcegate/internal/text"
 )
 
-var pypiBaseURL = "https://pypi.org/pypi"
+var BaseURL = "https://pypi.org/pypi"
 
-type pypiResponse struct {
-	Info     pypiInfo                 `json:"info"`
-	Releases map[string][]pypiRelease `json:"releases"`
-	URLs     []pypiRelease            `json:"urls"`
+type Adapter struct {
+	client *http.Client
 }
 
-type pypiInfo struct {
+func New(client *http.Client) *Adapter {
+	return &Adapter{client: client}
+}
+
+type registryResponse struct {
+	Info     info                 `json:"info"`
+	Releases map[string][]release `json:"releases"`
+	URLs     []release            `json:"urls"`
+}
+
+type info struct {
 	Name        string            `json:"name"`
 	Version     string            `json:"version"`
 	Summary     string            `json:"summary"`
@@ -28,59 +39,62 @@ type pypiInfo struct {
 	HomePage    string            `json:"home_page"`
 }
 
-type pypiRelease struct {
+type release struct {
 	UploadTimeISO string `json:"upload_time_iso_8601"`
 }
 
-func FetchPyPIMetadata(ctx context.Context, client *http.Client, packageName string) (PackageReport, error) {
-	endpoint := pypiBaseURL + "/" + url.PathEscape(packageName) + "/json"
+func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report.PackageReport, error) {
+	client := a.client
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	endpoint := BaseURL + "/" + url.PathEscape(packageName) + "/json"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return PackageReport{}, err
+		return report.PackageReport{}, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "sourcegate/0.1")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return PackageReport{}, fmt.Errorf("fetch PyPI metadata: %w", err)
+		return report.PackageReport{}, fmt.Errorf("fetch PyPI metadata: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return PackageReport{}, fmt.Errorf("PyPI package not found: %s", packageName)
+		return report.PackageReport{}, fmt.Errorf("PyPI package not found: %s", packageName)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return PackageReport{}, fmt.Errorf("PyPI returned status %d for %s", resp.StatusCode, packageName)
+		return report.PackageReport{}, fmt.Errorf("PyPI returned status %d for %s", resp.StatusCode, packageName)
 	}
 
-	var data pypiResponse
+	var data registryResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return PackageReport{}, fmt.Errorf("decode PyPI metadata: %w", err)
+		return report.PackageReport{}, fmt.Errorf("decode PyPI metadata: %w", err)
 	}
 
-	created, modified := pypiReleaseBounds(data.Releases)
-	latestPublishedAt := pypiLatestReleaseTime(data.Releases[data.Info.Version])
-	previousPublishedAt := previousPyPIPublishedAt(data.Releases, data.Info.Version)
+	created, modified := releaseBounds(data.Releases)
 
-	return PackageReport{
+	return report.PackageReport{
 		Ecosystem:           "PyPI",
 		Registry:            "PyPI",
-		Name:                firstNonEmpty(data.Info.Name, packageName),
+		Name:                text.FirstNonEmpty(data.Info.Name, packageName),
 		LatestVersion:       data.Info.Version,
-		LatestPublishedAt:   latestPublishedAt,
-		PreviousPublishedAt: previousPublishedAt,
+		LatestPublishedAt:   latestReleaseTime(data.Releases[data.Info.Version]),
+		PreviousPublishedAt: previousPublishedAt(data.Releases, data.Info.Version),
 		Description:         data.Info.Summary,
 		License:             data.Info.License,
-		Author:              formatPyPIAuthor(data.Info.Author, data.Info.AuthorEmail),
-		ProjectURLs:         pypiProjectURLs(data.Info),
+		Author:              formatAuthor(data.Info.Author, data.Info.AuthorEmail),
+		ProjectURLs:         projectURLs(data.Info),
 		CreatedAt:           created,
 		ModifiedAt:          modified,
 		VersionCount:        len(data.Releases),
 	}, nil
 }
 
-func previousPyPIPublishedAt(releases map[string][]pypiRelease, latestVersion string) string {
+func previousPublishedAt(releases map[string][]release, latestVersion string) string {
 	var uploads []string
 	for version, files := range releases {
 		if version == latestVersion {
@@ -99,7 +113,7 @@ func previousPyPIPublishedAt(releases map[string][]pypiRelease, latestVersion st
 	return uploads[len(uploads)-1]
 }
 
-func pypiReleaseBounds(releases map[string][]pypiRelease) (string, string) {
+func releaseBounds(releases map[string][]release) (string, string) {
 	var uploads []string
 	for _, files := range releases {
 		for _, file := range files {
@@ -115,7 +129,7 @@ func pypiReleaseBounds(releases map[string][]pypiRelease) (string, string) {
 	return uploads[0], uploads[len(uploads)-1]
 }
 
-func pypiLatestReleaseTime(files []pypiRelease) string {
+func latestReleaseTime(files []release) string {
 	var uploads []string
 	for _, file := range files {
 		if file.UploadTimeISO != "" {
@@ -129,7 +143,7 @@ func pypiLatestReleaseTime(files []pypiRelease) string {
 	return uploads[len(uploads)-1]
 }
 
-func formatPyPIAuthor(name, email string) string {
+func formatAuthor(name, email string) string {
 	switch {
 	case name != "" && email != "":
 		return fmt.Sprintf("%s <%s>", name, email)
@@ -142,12 +156,12 @@ func formatPyPIAuthor(name, email string) string {
 	}
 }
 
-func pypiProjectURLs(info pypiInfo) []string {
+func projectURLs(info info) []string {
 	values := make([]string, 0, len(info.ProjectURLs)+1)
 	values = append(values, info.HomePage)
 	for _, value := range info.ProjectURLs {
 		values = append(values, value)
 	}
 	sort.Strings(values)
-	return compactUnique(values)
+	return text.CompactUnique(values)
 }

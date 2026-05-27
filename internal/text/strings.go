@@ -1,8 +1,8 @@
-package sourcegate
+package text
 
 import "strings"
 
-func firstNonEmpty(values ...string) string {
+func FirstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
 			return value
@@ -11,7 +11,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func compactUnique(values []string) []string {
+func CompactUnique(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))
 	for _, value := range values {

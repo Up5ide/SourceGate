@@ -1,6 +1,10 @@
-package sourcegate
+package cli
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/sourcegate/sourcegate/internal/ecosystem"
+)
 
 func TestParseInstallCommandNPM(t *testing.T) {
 	req, err := ParseInstallCommand([]string{"npm", "install", "lodash"})
@@ -8,8 +12,8 @@ func TestParseInstallCommandNPM(t *testing.T) {
 		t.Fatalf("ParseInstallCommand returned error: %v", err)
 	}
 
-	if req.Ecosystem != EcosystemNPM {
-		t.Fatalf("ecosystem = %q, want %q", req.Ecosystem, EcosystemNPM)
+	if req.Ecosystem != ecosystem.NPM {
+		t.Fatalf("ecosystem = %q, want %q", req.Ecosystem, ecosystem.NPM)
 	}
 	if req.Package != "lodash" {
 		t.Fatalf("package = %q, want lodash", req.Package)
@@ -22,8 +26,8 @@ func TestParseInstallCommandPip(t *testing.T) {
 		t.Fatalf("ParseInstallCommand returned error: %v", err)
 	}
 
-	if req.Ecosystem != EcosystemPyPI {
-		t.Fatalf("ecosystem = %q, want %q", req.Ecosystem, EcosystemPyPI)
+	if req.Ecosystem != ecosystem.PyPI {
+		t.Fatalf("ecosystem = %q, want %q", req.Ecosystem, ecosystem.PyPI)
 	}
 	if req.Package != "requests" {
 		t.Fatalf("package = %q, want requests", req.Package)
