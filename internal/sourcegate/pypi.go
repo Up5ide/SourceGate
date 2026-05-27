@@ -60,19 +60,21 @@ func FetchPyPIMetadata(ctx context.Context, client *http.Client, packageName str
 	}
 
 	created, modified := pypiReleaseBounds(data.Releases)
+	latestPublishedAt := pypiLatestReleaseTime(data.Releases[data.Info.Version])
 
 	return PackageReport{
-		Ecosystem:     "PyPI",
-		Registry:      "PyPI",
-		Name:          firstNonEmpty(data.Info.Name, packageName),
-		LatestVersion: data.Info.Version,
-		Description:   data.Info.Summary,
-		License:       data.Info.License,
-		Author:        formatPyPIAuthor(data.Info.Author, data.Info.AuthorEmail),
-		ProjectURLs:   pypiProjectURLs(data.Info),
-		CreatedAt:     created,
-		ModifiedAt:    modified,
-		VersionCount:  len(data.Releases),
+		Ecosystem:         "PyPI",
+		Registry:          "PyPI",
+		Name:              firstNonEmpty(data.Info.Name, packageName),
+		LatestVersion:     data.Info.Version,
+		LatestPublishedAt: latestPublishedAt,
+		Description:       data.Info.Summary,
+		License:           data.Info.License,
+		Author:            formatPyPIAuthor(data.Info.Author, data.Info.AuthorEmail),
+		ProjectURLs:       pypiProjectURLs(data.Info),
+		CreatedAt:         created,
+		ModifiedAt:        modified,
+		VersionCount:      len(data.Releases),
 	}, nil
 }
 
@@ -90,6 +92,20 @@ func pypiReleaseBounds(releases map[string][]pypiRelease) (string, string) {
 	}
 	sort.Strings(uploads)
 	return uploads[0], uploads[len(uploads)-1]
+}
+
+func pypiLatestReleaseTime(files []pypiRelease) string {
+	var uploads []string
+	for _, file := range files {
+		if file.UploadTimeISO != "" {
+			uploads = append(uploads, file.UploadTimeISO)
+		}
+	}
+	if len(uploads) == 0 {
+		return ""
+	}
+	sort.Strings(uploads)
+	return uploads[len(uploads)-1]
 }
 
 func formatPyPIAuthor(name, email string) string {

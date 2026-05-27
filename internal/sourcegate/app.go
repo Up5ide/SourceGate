@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 type App struct {
@@ -28,6 +29,11 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	config, err := LoadConfig(defaultConfigPath)
+	if err != nil {
+		return err
+	}
+
 	var report PackageReport
 	switch req.Ecosystem {
 	case EcosystemNPM:
@@ -41,6 +47,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	EvaluatePolicy(&report, config, time.Now())
 	RenderHuman(a.out, report)
 	return nil
 }

@@ -1,0 +1,5 @@
+{
+  "policy": {
+    "minimum_days_since_latest_release": 3
+  }
+}

@@ -79,18 +79,19 @@ func FetchNPMMetadata(ctx context.Context, client *http.Client, packageName stri
 	}
 
 	return PackageReport{
-		Ecosystem:     "npm",
-		Registry:      "npm registry",
-		Name:          firstNonEmpty(data.Name, packageName),
-		LatestVersion: latest,
-		Description:   data.Description,
-		License:       license,
-		Author:        formatNPMPerson(data.Author),
-		Maintainers:   formatNPMPeople(data.Maintainers),
-		ProjectURLs:   npmProjectURLs(data),
-		CreatedAt:     data.Time["created"],
-		ModifiedAt:    data.Time["modified"],
-		VersionCount:  len(data.Versions),
+		Ecosystem:         "npm",
+		Registry:          "npm registry",
+		Name:              firstNonEmpty(data.Name, packageName),
+		LatestVersion:     latest,
+		LatestPublishedAt: data.Time[latest],
+		Description:       data.Description,
+		License:           license,
+		Author:            formatNPMPerson(data.Author),
+		Maintainers:       formatNPMPeople(data.Maintainers),
+		ProjectURLs:       npmProjectURLs(data),
+		CreatedAt:         data.Time["created"],
+		ModifiedAt:        data.Time["modified"],
+		VersionCount:      len(data.Versions),
 	}, nil
 }
 
