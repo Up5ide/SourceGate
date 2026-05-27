@@ -1,0 +1,41 @@
+package sourcegate
+
+import (
+	"fmt"
+	"io"
+	"strings"
+)
+
+func RenderHuman(w io.Writer, report PackageReport) {
+	fmt.Fprintf(w, "Ecosystem: %s\n", report.Ecosystem)
+	fmt.Fprintf(w, "Registry: %s\n", report.Registry)
+	fmt.Fprintf(w, "Package: %s\n", valueOrUnknown(report.Name))
+	fmt.Fprintf(w, "Latest Version: %s\n", valueOrUnknown(report.LatestVersion))
+	fmt.Fprintf(w, "Description: %s\n", valueOrUnknown(report.Description))
+	fmt.Fprintf(w, "License: %s\n", valueOrUnknown(report.License))
+	fmt.Fprintf(w, "Author: %s\n", valueOrUnknown(report.Author))
+	fmt.Fprintf(w, "Versions: %d\n", report.VersionCount)
+	fmt.Fprintf(w, "Created: %s\n", valueOrUnknown(report.CreatedAt))
+	fmt.Fprintf(w, "Modified: %s\n", valueOrUnknown(report.ModifiedAt))
+
+	if len(report.Maintainers) > 0 {
+		fmt.Fprintf(w, "Maintainers: %s\n", strings.Join(report.Maintainers, ", "))
+	}
+	if len(report.ProjectURLs) > 0 {
+		fmt.Fprintln(w, "Project URLs:")
+		for _, url := range report.ProjectURLs {
+			fmt.Fprintf(w, "  - %s\n", url)
+		}
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Decision: INSPECT_ONLY")
+	fmt.Fprintln(w, "Install executed: no")
+}
+
+func valueOrUnknown(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return value
+}
