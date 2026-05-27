@@ -4,9 +4,9 @@ SourceGate is a security-first Go CLI that sits in front of package managers and
 
 The long-term goal is to become a local, policy-driven enforcement layer for software supply-chain risk. SourceGate should help developers and CI systems identify risky packages, explain the reasons clearly, and eventually allow, warn, or block installation based on deterministic policy.
 
-## Version 0.1 Scope
+## Version 0.2 Scope
 
-Version 0.1 is intentionally small.
+Version 0.2 is intentionally small.
 
 The first milestone does not install packages, download package archives, or invoke the real package manager. Instead, it accepts familiar install-shaped commands and fetches public registry metadata for the requested package.
 
@@ -66,6 +66,7 @@ Supported behavior:
 - Display package metadata available from the registry.
 - Read local policy from `sourcegate.config.json`.
 - Block packages whose latest registry release is newer than the configured minimum age.
+- Block packages whose latest release follows a long configured period of package inactivity.
 - Exit without installing the package.
 - Avoid invoking `npm`, `pip`, or any package lifecycle hooks.
 
@@ -80,7 +81,8 @@ Current configuration:
 ```json
 {
   "policy": {
-    "minimum_days_since_latest_release": 3
+    "minimum_days_since_latest_release": 3,
+    "dormant_release_threshold_days": 180
   }
 }
 ```
@@ -89,7 +91,9 @@ Current configuration:
 
 This is intended to reduce exposure to fast-moving compromise windows where an attacker gains publish access, releases malicious code, and users update before the incident is detected and remediated.
 
-In version 0.1 this check uses registry publish time, not upstream Git commit time. Repository commit analysis is planned for a later version.
+`dormant_release_threshold_days` blocks packages when the latest release follows a long period of inactivity. For example, `180` means a package is blocked when the previous release was at least 180 days before the latest release.
+
+In version 0.2 these checks use registry publish time, not upstream Git commit time. Repository commit analysis is planned for a later version.
 
 ## Planned Next
 

@@ -77,22 +77,39 @@ func FetchNPMMetadata(ctx context.Context, client *http.Client, packageName stri
 	if license == "" && latest != "" {
 		license = data.Versions[latest].License
 	}
+	previousPublishedAt := previousNPMPublishedAt(data.Time, latest)
 
 	return PackageReport{
-		Ecosystem:         "npm",
-		Registry:          "npm registry",
-		Name:              firstNonEmpty(data.Name, packageName),
-		LatestVersion:     latest,
-		LatestPublishedAt: data.Time[latest],
-		Description:       data.Description,
-		License:           license,
-		Author:            formatNPMPerson(data.Author),
-		Maintainers:       formatNPMPeople(data.Maintainers),
-		ProjectURLs:       npmProjectURLs(data),
-		CreatedAt:         data.Time["created"],
-		ModifiedAt:        data.Time["modified"],
-		VersionCount:      len(data.Versions),
+		Ecosystem:           "npm",
+		Registry:            "npm registry",
+		Name:                firstNonEmpty(data.Name, packageName),
+		LatestVersion:       latest,
+		LatestPublishedAt:   data.Time[latest],
+		PreviousPublishedAt: previousPublishedAt,
+		Description:         data.Description,
+		License:             license,
+		Author:              formatNPMPerson(data.Author),
+		Maintainers:         formatNPMPeople(data.Maintainers),
+		ProjectURLs:         npmProjectURLs(data),
+		CreatedAt:           data.Time["created"],
+		ModifiedAt:          data.Time["modified"],
+		VersionCount:        len(data.Versions),
 	}, nil
+}
+
+func previousNPMPublishedAt(times map[string]string, latestVersion string) string {
+	var releases []string
+	for version, publishedAt := range times {
+		if version == "created" || version == "modified" || version == latestVersion || publishedAt == "" {
+			continue
+		}
+		releases = append(releases, publishedAt)
+	}
+	if len(releases) == 0 {
+		return ""
+	}
+	sort.Strings(releases)
+	return releases[len(releases)-1]
 }
 
 func formatNPMPeople(people []npmPerson) []string {

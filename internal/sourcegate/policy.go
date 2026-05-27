@@ -21,16 +21,44 @@ type Finding struct {
 func EvaluatePolicy(report *PackageReport, config Config, now time.Time) {
 	report.Decision = DecisionInspectOnly
 
-	minDays := config.Policy.MinimumDaysSinceLatestRelease
-	if minDays == 0 {
+	policiesEnabled := config.Policy.MinimumDaysSinceLatestRelease > 0 ||
+		config.Policy.DormantReleaseThresholdDays > 0
+	if !policiesEnabled {
 		return
 	}
 
-	report.PolicySummary = fmt.Sprintf("latest release must be at least %d day(s) old", minDays)
+	var policySummaries []string
+	if config.Policy.MinimumDaysSinceLatestRelease > 0 {
+		policySummaries = append(
+			policySummaries,
+			fmt.Sprintf("latest release must be at least %d day(s) old", config.Policy.MinimumDaysSinceLatestRelease),
+		)
+	}
+	if config.Policy.DormantReleaseThresholdDays > 0 {
+		policySummaries = append(
+			policySummaries,
+			fmt.Sprintf("release inactivity gap must be below %d day(s)", config.Policy.DormantReleaseThresholdDays),
+		)
+	}
+	report.PolicySummary = joinPolicySummaries(policySummaries)
 
+	if config.Policy.MinimumDaysSinceLatestRelease > 0 {
+		evaluateLatestReleaseAge(report, config.Policy.MinimumDaysSinceLatestRelease, now)
+	}
+	if config.Policy.DormantReleaseThresholdDays > 0 {
+		evaluateDormantRelease(report, config.Policy.DormantReleaseThresholdDays)
+	}
+
+	if hasHighSeverityFinding(report.Findings) {
+		report.Decision = DecisionBlock
+		return
+	}
+	report.Decision = DecisionAllow
+}
+
+func evaluateLatestReleaseAge(report *PackageReport, minDays int, now time.Time) {
 	latestPublishedAt, err := parseRegistryTime(report.LatestPublishedAt)
 	if err != nil {
-		report.Decision = DecisionBlock
 		report.Findings = append(report.Findings, Finding{
 			Severity: "HIGH",
 			Message:  "latest release publish time is unavailable or invalid",
@@ -41,7 +69,6 @@ func EvaluatePolicy(report *PackageReport, config Config, now time.Time) {
 	age := now.UTC().Sub(latestPublishedAt.UTC())
 	requiredAge := time.Duration(minDays) * 24 * time.Hour
 	if age < requiredAge {
-		report.Decision = DecisionBlock
 		report.Findings = append(report.Findings, Finding{
 			Severity: "HIGH",
 			Message: fmt.Sprintf(
@@ -53,11 +80,69 @@ func EvaluatePolicy(report *PackageReport, config Config, now time.Time) {
 		return
 	}
 
-	report.Decision = DecisionAllow
 	report.Findings = append(report.Findings, Finding{
 		Severity: "INFO",
 		Message:  fmt.Sprintf("latest release age satisfies configured minimum of %d day(s)", minDays),
 	})
+}
+
+func evaluateDormantRelease(report *PackageReport, thresholdDays int) {
+	latestPublishedAt, err := parseRegistryTime(report.LatestPublishedAt)
+	if err != nil {
+		report.Findings = append(report.Findings, Finding{
+			Severity: "HIGH",
+			Message:  "latest release publish time is unavailable or invalid",
+		})
+		return
+	}
+
+	previousPublishedAt, err := parseRegistryTime(report.PreviousPublishedAt)
+	if err != nil {
+		report.Findings = append(report.Findings, Finding{
+			Severity: "INFO",
+			Message:  "previous release publish time is unavailable; dormant release check skipped",
+		})
+		return
+	}
+
+	inactivity := latestPublishedAt.UTC().Sub(previousPublishedAt.UTC())
+	threshold := time.Duration(thresholdDays) * 24 * time.Hour
+	if inactivity >= threshold {
+		report.Findings = append(report.Findings, Finding{
+			Severity: "HIGH",
+			Message: fmt.Sprintf(
+				"latest release follows %d day(s) of package inactivity, meeting or exceeding configured threshold of %d day(s)",
+				int(inactivity.Hours()/24),
+				thresholdDays,
+			),
+		})
+		return
+	}
+
+	report.Findings = append(report.Findings, Finding{
+		Severity: "INFO",
+		Message:  fmt.Sprintf("release inactivity gap is below configured threshold of %d day(s)", thresholdDays),
+	})
+}
+
+func hasHighSeverityFinding(findings []Finding) bool {
+	for _, finding := range findings {
+		if finding.Severity == "HIGH" {
+			return true
+		}
+	}
+	return false
+}
+
+func joinPolicySummaries(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	result := values[0]
+	for _, value := range values[1:] {
+		result += "; " + value
+	}
+	return result
 }
 
 func parseRegistryTime(value string) (time.Time, error) {

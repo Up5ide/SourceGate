@@ -1,5 +1,6 @@
 {
   "policy": {
-    "minimum_days_since_latest_release": 3
+    "minimum_days_since_latest_release": 3,
+    "dormant_release_threshold_days": 180
   }
 }

@@ -12,6 +12,7 @@ func RenderHuman(w io.Writer, report PackageReport) {
 	fmt.Fprintf(w, "Package: %s\n", valueOrUnknown(report.Name))
 	fmt.Fprintf(w, "Latest Version: %s\n", valueOrUnknown(report.LatestVersion))
 	fmt.Fprintf(w, "Latest Published: %s\n", valueOrUnknown(report.LatestPublishedAt))
+	fmt.Fprintf(w, "Previous Published: %s\n", valueOrUnknown(report.PreviousPublishedAt))
 	fmt.Fprintf(w, "Description: %s\n", valueOrUnknown(report.Description))
 	fmt.Fprintf(w, "License: %s\n", valueOrUnknown(report.License))
 	fmt.Fprintf(w, "Author: %s\n", valueOrUnknown(report.Author))

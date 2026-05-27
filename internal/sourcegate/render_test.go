@@ -24,6 +24,7 @@ func TestRenderHumanStatesInspectOnly(t *testing.T) {
 	for _, want := range []string{
 		"Ecosystem: npm",
 		"Package: lodash",
+		"Previous Published: unknown",
 		"Decision: ALLOW",
 		"[INFO] latest release age satisfies configured minimum of 3 day(s)",
 		"Install executed: no",

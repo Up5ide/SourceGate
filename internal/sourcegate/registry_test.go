@@ -24,6 +24,7 @@ func TestFetchNPMMetadata(t *testing.T) {
 			"time": {
 				"created": "2012-04-23T16:37:43.123Z",
 				"modified": "2021-02-20T15:42:16.891Z",
+				"4.17.20": "2020-02-20T15:42:16.891Z",
 				"4.17.21": "2021-02-20T15:42:16.891Z"
 			},
 			"versions": {"4.17.20": {}, "4.17.21": {}},
@@ -48,6 +49,9 @@ func TestFetchNPMMetadata(t *testing.T) {
 	}
 	if report.LatestPublishedAt != "2021-02-20T15:42:16.891Z" {
 		t.Fatalf("latest published = %q", report.LatestPublishedAt)
+	}
+	if report.PreviousPublishedAt != "2020-02-20T15:42:16.891Z" {
+		t.Fatalf("previous published = %q", report.PreviousPublishedAt)
 	}
 	if len(report.ProjectURLs) != 3 {
 		t.Fatalf("project urls = %v, want 3 urls", report.ProjectURLs)
@@ -99,6 +103,9 @@ func TestFetchPyPIMetadata(t *testing.T) {
 	}
 	if report.LatestPublishedAt != "2024-05-29T00:00:00.000000Z" {
 		t.Fatalf("latest published = %q", report.LatestPublishedAt)
+	}
+	if report.PreviousPublishedAt != "2024-05-21T00:00:00.000000Z" {
+		t.Fatalf("previous published = %q", report.PreviousPublishedAt)
 	}
 	if report.CreatedAt != "2024-05-21T00:00:00.000000Z" {
 		t.Fatalf("created = %q", report.CreatedAt)

@@ -15,6 +15,7 @@ type Config struct {
 
 type PolicyConfig struct {
 	MinimumDaysSinceLatestRelease int `json:"minimum_days_since_latest_release"`
+	DormantReleaseThresholdDays   int `json:"dormant_release_threshold_days"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -32,6 +33,9 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if config.Policy.MinimumDaysSinceLatestRelease < 0 {
 		return Config{}, fmt.Errorf("minimum_days_since_latest_release cannot be negative")
+	}
+	if config.Policy.DormantReleaseThresholdDays < 0 {
+		return Config{}, fmt.Errorf("dormant_release_threshold_days cannot be negative")
 	}
 
 	return config, nil

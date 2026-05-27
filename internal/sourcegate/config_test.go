@@ -8,7 +8,7 @@ import (
 
 func TestLoadConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sourcegate.config.json")
-	if err := os.WriteFile(path, []byte(`{"policy":{"minimum_days_since_latest_release":5}}`), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"policy":{"minimum_days_since_latest_release":5,"dormant_release_threshold_days":180}}`), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -19,6 +19,9 @@ func TestLoadConfig(t *testing.T) {
 
 	if config.Policy.MinimumDaysSinceLatestRelease != 5 {
 		t.Fatalf("minimum days = %d, want 5", config.Policy.MinimumDaysSinceLatestRelease)
+	}
+	if config.Policy.DormantReleaseThresholdDays != 180 {
+		t.Fatalf("dormant threshold days = %d, want 180", config.Policy.DormantReleaseThresholdDays)
 	}
 }
 
