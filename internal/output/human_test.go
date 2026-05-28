@@ -17,7 +17,7 @@ func TestRenderHumanStatesDecisionAndFindings(t *testing.T) {
 		LatestVersion: "4.17.21",
 		Decision:      report.DecisionAllow,
 		Findings: []report.Finding{
-			{Severity: "INFO", Message: "latest release age satisfies configured minimum of 3 day(s)"},
+			{Severity: "ALERT", Message: "latest release was published 1 day(s) ago"},
 		},
 		VersionCount: 2,
 	})
@@ -28,7 +28,7 @@ func TestRenderHumanStatesDecisionAndFindings(t *testing.T) {
 		"Package: lodash",
 		"Previous Published: unknown",
 		"Decision: ALLOW",
-		"[INFO] latest release age satisfies configured minimum of 3 day(s)",
+		"[ALERT] latest release was published 1 day(s) ago",
 		"Install executed: no",
 	} {
 		if !strings.Contains(output, want) {

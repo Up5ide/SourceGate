@@ -1,14 +1,43 @@
 {
   "policy": {
-    "minimum_days_since_latest_release": 3,
-    "dormant_release_threshold_days": 180,
-    "protected_packages": {
-      "npm": ["react", "lodash", "@tanstack/react-query"],
-      "pypi": ["requests", "django"]
+    "inform": {
+      "minimum_days_since_latest_release": 1,
+      "dormant_release_threshold_days": 90,
+      "alert_on_first_release": true,
+      "install_lifecycle_scripts": false,
+      "install_lifecycle_history_versions": 0,
+      "suspicious_install_script_commands": false,
+      "install_script_added_after_dormancy": false,
+      "protected_packages": {},
+      "protected_tokens": {}
     },
-    "protected_tokens": {
-      "npm": ["tanstack", "aws", "babel"],
-      "pypi": ["django", "pytest"]
+    "alert": {
+      "minimum_days_since_latest_release": 3,
+      "dormant_release_threshold_days": 180,
+      "alert_on_first_release": true,
+      "install_lifecycle_scripts": true,
+      "install_lifecycle_history_versions": 5,
+      "suspicious_install_script_commands": false,
+      "install_script_added_after_dormancy": true,
+      "protected_packages": {
+        "npm": ["react", "lodash", "@tanstack/react-query"],
+        "pypi": ["requests", "django"]
+      },
+      "protected_tokens": {
+        "npm": ["tanstack", "aws", "babel"],
+        "pypi": ["django", "pytest"]
+      }
+    },
+    "block": {
+      "minimum_days_since_latest_release": 0,
+      "dormant_release_threshold_days": 0,
+      "alert_on_first_release": false,
+      "install_lifecycle_scripts": false,
+      "install_lifecycle_history_versions": 0,
+      "suspicious_install_script_commands": true,
+      "install_script_added_after_dormancy": false,
+      "protected_packages": {},
+      "protected_tokens": {}
     }
   }
 }

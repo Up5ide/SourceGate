@@ -38,7 +38,8 @@ type registryResponse struct {
 }
 
 type versionDoc struct {
-	License string `json:"license"`
+	License string            `json:"license"`
+	Scripts map[string]string `json:"scripts"`
 }
 
 type person struct {
@@ -68,7 +69,7 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 		return report.PackageReport{}, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "sourcegate/0.1")
+	req.Header.Set("User-Agent", "sourcegate/0.4")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -89,9 +90,10 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 	}
 
 	latest := data.DistTags["latest"]
+	latestVersion := data.Versions[latest]
 	license := data.License
 	if license == "" && latest != "" {
-		license = data.Versions[latest].License
+		license = latestVersion.License
 	}
 
 	return report.PackageReport{
@@ -105,11 +107,64 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 		License:             license,
 		Author:              formatPerson(data.Author),
 		Maintainers:         formatPeople(data.Maintainers),
+		LifecycleScripts:    compactStringMap(latestVersion.Scripts),
+		LifecycleHistory:    lifecycleHistory(data.Time, data.Versions, latest),
 		ProjectURLs:         projectURLs(data),
 		CreatedAt:           data.Time["created"],
 		ModifiedAt:          data.Time["modified"],
 		VersionCount:        len(data.Versions),
 	}, nil
+}
+
+type lifecycleHistoryEntry struct {
+	version     string
+	publishedAt string
+}
+
+func lifecycleHistory(times map[string]string, versions map[string]versionDoc, latestVersion string) []report.VersionLifecycleScripts {
+	var entries []lifecycleHistoryEntry
+	for version, publishedAt := range times {
+		if version == "created" || version == "modified" || version == latestVersion || publishedAt == "" {
+			continue
+		}
+		entries = append(entries, lifecycleHistoryEntry{version: version, publishedAt: publishedAt})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].publishedAt == entries[j].publishedAt {
+			return entries[i].version > entries[j].version
+		}
+		return entries[i].publishedAt > entries[j].publishedAt
+	})
+
+	history := make([]report.VersionLifecycleScripts, 0, len(entries))
+	for _, entry := range entries {
+		version, ok := versions[entry.version]
+		history = append(history, report.VersionLifecycleScripts{
+			Version:      entry.version,
+			PublishedAt:  entry.publishedAt,
+			Scripts:      compactStringMap(version.Scripts),
+			ScriptsKnown: ok,
+		})
+	}
+	return history
+}
+
+func compactStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	compacted := make(map[string]string)
+	for key, value := range values {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			compacted[key] = value
+		}
+	}
+	if len(compacted) == 0 {
+		return nil
+	}
+	return compacted
 }
 
 func previousPublishedAt(times map[string]string, latestVersion string) string {

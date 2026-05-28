@@ -17,7 +17,7 @@ func TestNormalizePackageName(t *testing.T) {
 }
 
 func TestProtectedPackageExactMatchCreatesNoFinding(t *testing.T) {
-	findings := Check(report.PackageReport{Ecosystem: "PyPI", Name: "requests"}, config.PolicyConfig{
+	findings := Check(report.PackageReport{Ecosystem: "PyPI", Name: "requests"}, config.PolicyTierConfig{
 		ProtectedPackages: map[string][]string{
 			"pypi": {"requests"},
 		},
@@ -28,7 +28,7 @@ func TestProtectedPackageExactMatchCreatesNoFinding(t *testing.T) {
 	}
 }
 
-func TestProtectedPackageTypoCreatesMediumFinding(t *testing.T) {
+func TestProtectedPackageTypoCreatesFinding(t *testing.T) {
 	cases := []struct {
 		name             string
 		packageName      string
@@ -40,7 +40,7 @@ func TestProtectedPackageTypoCreatesMediumFinding(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			findings := Check(report.PackageReport{Ecosystem: "PyPI", Name: tc.packageName}, config.PolicyConfig{
+			findings := Check(report.PackageReport{Ecosystem: "PyPI", Name: tc.packageName}, config.PolicyTierConfig{
 				ProtectedPackages: map[string][]string{
 					"pypi": {tc.protectedPackage},
 				},
@@ -49,15 +49,15 @@ func TestProtectedPackageTypoCreatesMediumFinding(t *testing.T) {
 			if len(findings) != 1 {
 				t.Fatalf("findings = %+v, want 1 finding", findings)
 			}
-			if findings[0].Severity != "MEDIUM" {
-				t.Fatalf("severity = %q, want MEDIUM", findings[0].Severity)
+			if findings[0].Severity != "" {
+				t.Fatalf("severity = %q, want empty severity", findings[0].Severity)
 			}
 		})
 	}
 }
 
 func TestProtectedPackageUnrelatedNameCreatesNoFinding(t *testing.T) {
-	findings := Check(report.PackageReport{Ecosystem: "npm", Name: "chalk"}, config.PolicyConfig{
+	findings := Check(report.PackageReport{Ecosystem: "npm", Name: "chalk"}, config.PolicyTierConfig{
 		ProtectedPackages: map[string][]string{
 			"npm": {"react"},
 		},
@@ -68,8 +68,8 @@ func TestProtectedPackageUnrelatedNameCreatesNoFinding(t *testing.T) {
 	}
 }
 
-func TestProtectedTokenBoundaryCreatesMediumFinding(t *testing.T) {
-	findings := Check(report.PackageReport{Ecosystem: "npm", Name: "tanstack-query-utils"}, config.PolicyConfig{
+func TestProtectedTokenBoundaryCreatesFinding(t *testing.T) {
+	findings := Check(report.PackageReport{Ecosystem: "npm", Name: "tanstack-query-utils"}, config.PolicyTierConfig{
 		ProtectedTokens: map[string][]string{
 			"npm": {"tanstack"},
 		},
@@ -78,13 +78,13 @@ func TestProtectedTokenBoundaryCreatesMediumFinding(t *testing.T) {
 	if len(findings) != 1 {
 		t.Fatalf("findings = %+v, want 1 finding", findings)
 	}
-	if findings[0].Severity != "MEDIUM" {
-		t.Fatalf("severity = %q, want MEDIUM", findings[0].Severity)
+	if findings[0].Severity != "" {
+		t.Fatalf("severity = %q, want empty severity", findings[0].Severity)
 	}
 }
 
 func TestProtectedTokenInsideWordCreatesNoFinding(t *testing.T) {
-	findings := Check(report.PackageReport{Ecosystem: "npm", Name: "mytanstackhelper"}, config.PolicyConfig{
+	findings := Check(report.PackageReport{Ecosystem: "npm", Name: "mytanstackhelper"}, config.PolicyTierConfig{
 		ProtectedTokens: map[string][]string{
 			"npm": {"tanstack"},
 		},
@@ -96,7 +96,7 @@ func TestProtectedTokenInsideWordCreatesNoFinding(t *testing.T) {
 }
 
 func TestProtectedTokenExactProtectedPackageCreatesNoFinding(t *testing.T) {
-	findings := Check(report.PackageReport{Ecosystem: "npm", Name: "@tanstack/react-query"}, config.PolicyConfig{
+	findings := Check(report.PackageReport{Ecosystem: "npm", Name: "@tanstack/react-query"}, config.PolicyTierConfig{
 		ProtectedPackages: map[string][]string{
 			"npm": {"@tanstack/react-query"},
 		},
@@ -110,8 +110,8 @@ func TestProtectedTokenExactProtectedPackageCreatesNoFinding(t *testing.T) {
 	}
 }
 
-func TestProtectedTokenScopedUnknownPackageCreatesMediumFinding(t *testing.T) {
-	findings := Check(report.PackageReport{Ecosystem: "npm", Name: "@tanstack/unknown"}, config.PolicyConfig{
+func TestProtectedTokenScopedUnknownPackageCreatesFinding(t *testing.T) {
+	findings := Check(report.PackageReport{Ecosystem: "npm", Name: "@tanstack/unknown"}, config.PolicyTierConfig{
 		ProtectedPackages: map[string][]string{
 			"npm": {"@tanstack/react-query"},
 		},
@@ -123,7 +123,7 @@ func TestProtectedTokenScopedUnknownPackageCreatesMediumFinding(t *testing.T) {
 	if len(findings) != 1 {
 		t.Fatalf("findings = %+v, want 1 finding", findings)
 	}
-	if findings[0].Severity != "MEDIUM" {
-		t.Fatalf("severity = %q, want MEDIUM", findings[0].Severity)
+	if findings[0].Severity != "" {
+		t.Fatalf("severity = %q, want empty severity", findings[0].Severity)
 	}
 }

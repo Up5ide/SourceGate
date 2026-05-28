@@ -4,9 +4,9 @@ SourceGate is a security-first Go CLI that sits in front of package managers and
 
 The long-term goal is to become a local, policy-driven enforcement layer for software supply-chain risk. SourceGate should help developers and CI systems identify risky packages, explain the reasons clearly, and eventually allow, warn, or block installation based on deterministic policy.
 
-## Version 0.3 Scope
+## Version 0.4 Scope
 
-Version 0.3 is intentionally small.
+Version 0.4 is intentionally small.
 
 The first milestone does not install packages, download package archives, or invoke the real package manager. Instead, it accepts familiar install-shaped commands and fetches public registry metadata for the requested package.
 
@@ -65,10 +65,15 @@ Supported behavior:
 - Query the relevant public registry.
 - Display package metadata available from the registry.
 - Read local policy from `sourcegate.config.json`.
-- Block packages whose latest registry release is newer than the configured minimum age.
-- Block packages whose latest release follows a long configured period of package inactivity.
-- Alert on obvious typosquatting against configured protected package names.
-- Alert on boundary-separated use of configured protected brand or organization tokens.
+- Emit tiered policy findings when the latest registry release is newer than the configured minimum age.
+- Emit tiered policy findings when the latest release follows a long configured period of package inactivity.
+- Emit tiered policy findings when a package has only one published version.
+- Emit tiered npm policy findings for declared install-time lifecycle scripts.
+- Emit tiered npm policy findings for suspicious install script command strings.
+- Emit tiered npm policy findings when lifecycle scripts are newly added or changed in recent version history.
+- Emit tiered npm policy findings when lifecycle scripts are newly added after package dormancy.
+- Emit tiered policy findings on obvious typosquatting against configured protected package names.
+- Emit tiered policy findings on boundary-separated use of configured protected brand or organization tokens.
 - Exit without installing the package.
 - Avoid invoking `npm`, `pip`, or any package lifecycle hooks.
 
@@ -83,31 +88,72 @@ Current configuration:
 ```json
 {
   "policy": {
-    "minimum_days_since_latest_release": 3,
-    "dormant_release_threshold_days": 180,
-    "protected_packages": {
-      "npm": ["react", "lodash", "@tanstack/react-query"],
-      "pypi": ["requests", "django"]
+    "inform": {
+      "minimum_days_since_latest_release": 1,
+      "dormant_release_threshold_days": 90,
+      "alert_on_first_release": true,
+      "install_lifecycle_scripts": false,
+      "install_lifecycle_history_versions": 0,
+      "suspicious_install_script_commands": false,
+      "install_script_added_after_dormancy": false,
+      "protected_packages": {},
+      "protected_tokens": {}
     },
-    "protected_tokens": {
-      "npm": ["tanstack", "aws", "babel"],
-      "pypi": ["django", "pytest"]
+    "alert": {
+      "minimum_days_since_latest_release": 3,
+      "dormant_release_threshold_days": 180,
+      "alert_on_first_release": true,
+      "install_lifecycle_scripts": true,
+      "install_lifecycle_history_versions": 5,
+      "suspicious_install_script_commands": false,
+      "install_script_added_after_dormancy": true,
+      "protected_packages": {
+        "npm": ["react", "lodash", "@tanstack/react-query"],
+        "pypi": ["requests", "django"]
+      },
+      "protected_tokens": {
+        "npm": ["tanstack", "aws", "babel"],
+        "pypi": ["django", "pytest"]
+      }
+    },
+    "block": {
+      "minimum_days_since_latest_release": 0,
+      "dormant_release_threshold_days": 0,
+      "alert_on_first_release": false,
+      "install_lifecycle_scripts": false,
+      "install_lifecycle_history_versions": 0,
+      "suspicious_install_script_commands": true,
+      "install_script_added_after_dormancy": false,
+      "protected_packages": {},
+      "protected_tokens": {}
     }
   }
 }
 ```
 
-`minimum_days_since_latest_release` blocks packages when the latest registry release is newer than the configured number of days.
+Policy is configured independently for `inform`, `alert`, and `block` tiers. SourceGate evaluates the strongest matching tier first and emits only one level per check. The `block` tier is currently a reported finding level only; SourceGate still exits without installing or blocking a real package-manager operation.
+
+`minimum_days_since_latest_release` emits a finding when the latest registry release is newer than the configured number of days.
 
 This is intended to reduce exposure to fast-moving compromise windows where an attacker gains publish access, releases malicious code, and users update before the incident is detected and remediated.
 
-`dormant_release_threshold_days` blocks packages when the latest release follows a long period of inactivity. For example, `180` means a package is blocked when the previous release was at least 180 days before the latest release.
+`dormant_release_threshold_days` emits a finding when the latest release follows a long period of inactivity. For example, `180` means a finding is emitted when the previous release was at least 180 days before the latest release.
 
-`protected_packages` alerts on one-edit lookalikes of configured package names. Exact matches do not create findings.
+`alert_on_first_release` emits a finding when the package has only one published version.
 
-`protected_tokens` alerts when a package uses a protected token as a separated name part, such as `tanstack-query-utils`. It does not alert on embedded strings such as `mytanstackhelper`.
+`install_lifecycle_scripts` emits npm-only findings when the latest package metadata declares install-relevant lifecycle scripts such as `preinstall`, `install`, `postinstall`, `prepublish`, `prepare`, `preprepare`, or `postprepare`.
 
-In version 0.3 release-age checks use registry publish time, not upstream Git commit time. Repository commit analysis is planned for a later version.
+`install_lifecycle_history_versions` controls how many previous npm versions are compared when detecting newly added or changed lifecycle scripts.
+
+`suspicious_install_script_commands` emits npm-only findings when declared lifecycle script commands contain suspicious metadata-visible patterns such as direct URLs, network download commands, shell or command interpreters, native build tooling, package-manager invocation, or permission-changing commands.
+
+`install_script_added_after_dormancy` emits npm-only findings when the latest release adds a lifecycle script after the same tier's configured `dormant_release_threshold_days` period.
+
+`protected_packages` emits findings on one-edit lookalikes of configured package names. Exact matches do not create findings.
+
+`protected_tokens` emits findings when a package uses a protected token as a separated name part, such as `tanstack-query-utils`. It does not alert on embedded strings such as `mytanstackhelper`.
+
+In version 0.4 release-age checks use registry publish time, not upstream Git commit time. Repository commit analysis is planned for a later version.
 
 ## Code Structure
 
@@ -140,12 +186,11 @@ Near-term work:
 - Add structured JSON output for automation and CI.
 - Support version-specific package requests such as `lodash@4.17.21` and `requests==2.31.0`.
 - Add registry error handling for missing packages, private packages, rate limits, and network failures.
-- Add more metadata findings, such as new packages, unusual release timing, and missing project information.
+- Add more metadata findings, such as unusual release timing and missing project information.
 
 Later work:
 
 - Download and inspect package archives without installing them.
-- Detect npm lifecycle scripts such as `preinstall`, `postinstall`, and `prepare`.
 - Detect Python build-time execution surfaces such as `setup.py` and build backends.
 - Add typosquatting and dependency confusion checks.
 - Add upstream repository commit-time analysis where package metadata exposes a source repository.

@@ -11,8 +11,7 @@ func Check(pkg report.PackageReport, minDays int, now time.Time) []report.Findin
 	latestPublishedAt, err := parseRegistryTime(pkg.LatestPublishedAt)
 	if err != nil {
 		return []report.Finding{{
-			Severity: "HIGH",
-			Message:  "latest release publish time is unavailable or invalid",
+			Message: "latest release publish time is unavailable or invalid",
 		}}
 	}
 
@@ -20,7 +19,6 @@ func Check(pkg report.PackageReport, minDays int, now time.Time) []report.Findin
 	requiredAge := time.Duration(minDays) * 24 * time.Hour
 	if age < requiredAge {
 		return []report.Finding{{
-			Severity: "HIGH",
 			Message: fmt.Sprintf(
 				"latest release was published %s ago, below configured minimum of %d day(s)",
 				formatAge(age),
@@ -29,10 +27,7 @@ func Check(pkg report.PackageReport, minDays int, now time.Time) []report.Findin
 		}}
 	}
 
-	return []report.Finding{{
-		Severity: "INFO",
-		Message:  fmt.Sprintf("latest release age satisfies configured minimum of %d day(s)", minDays),
-	}}
+	return nil
 }
 
 func parseRegistryTime(value string) (time.Time, error) {

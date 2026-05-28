@@ -9,7 +9,7 @@ import (
 	"github.com/sourcegate/sourcegate/internal/report"
 )
 
-func Check(pkg report.PackageReport, policy config.PolicyConfig) []report.Finding {
+func Check(pkg report.PackageReport, policy config.PolicyTierConfig) []report.Finding {
 	ecosystemKey := reportEcosystemKey(pkg)
 	if ecosystemKey == "" {
 		return nil
@@ -35,8 +35,7 @@ func protectedPackageTypos(packageName string, protectedPackages map[string]stru
 	for protectedPackage := range protectedPackages {
 		if IsOneEditPackageName(packageName, protectedPackage) {
 			return []report.Finding{{
-				Severity: "MEDIUM",
-				Message:  "package name may be typosquatting protected package " + protectedPackage,
+				Message: "package name may be typosquatting protected package " + protectedPackage,
 			}}
 		}
 	}
@@ -64,8 +63,7 @@ func protectedTokenUse(packageName string, protectedPackages map[string]struct{}
 		for _, packageToken := range packageTokens {
 			if packageToken == protectedToken {
 				return []report.Finding{{
-					Severity: "MEDIUM",
-					Message:  "package name uses protected token " + protectedToken,
+					Message: "package name uses protected token " + protectedToken,
 				}}
 			}
 		}

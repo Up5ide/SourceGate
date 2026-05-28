@@ -12,7 +12,7 @@ func TestCheckBlocksDormantRelease(t *testing.T) {
 		PreviousPublishedAt: "2025-05-27T12:00:00Z",
 	}, 180)
 
-	if len(findings) != 1 || findings[0].Severity != "HIGH" {
+	if len(findings) != 1 {
 		t.Fatalf("unexpected findings: %+v", findings)
 	}
 }
@@ -23,7 +23,7 @@ func TestCheckAllowsNonDormantRelease(t *testing.T) {
 		PreviousPublishedAt: "2026-04-27T12:00:00Z",
 	}, 180)
 
-	if len(findings) != 1 || findings[0].Severity != "INFO" {
+	if len(findings) != 0 {
 		t.Fatalf("unexpected findings: %+v", findings)
 	}
 }
@@ -33,7 +33,7 @@ func TestCheckSkipsDormantCheckForFirstRelease(t *testing.T) {
 		LatestPublishedAt: "2026-05-27T12:00:00Z",
 	}, 180)
 
-	if len(findings) != 1 || findings[0].Severity != "INFO" {
+	if len(findings) != 0 {
 		t.Fatalf("unexpected findings: %+v", findings)
 	}
 }

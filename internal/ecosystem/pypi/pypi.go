@@ -55,7 +55,7 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 		return report.PackageReport{}, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "sourcegate/0.1")
+	req.Header.Set("User-Agent", "sourcegate/0.4")
 
 	resp, err := client.Do(req)
 	if err != nil {

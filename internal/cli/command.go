@@ -30,7 +30,7 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 		return InstallRequest{}, fmt.Errorf("package name is required")
 	}
 	if strings.HasPrefix(pkg, "-") {
-		return InstallRequest{}, fmt.Errorf("package options are not supported in version 0.1: %s", pkg)
+		return InstallRequest{}, fmt.Errorf("package options are not supported in version 0.4: %s", pkg)
 	}
 
 	switch manager {

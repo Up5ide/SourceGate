@@ -24,10 +24,15 @@ func TestFetchMetadata(t *testing.T) {
 			"time": {
 				"created": "2012-04-23T16:37:43.123Z",
 				"modified": "2021-02-20T15:42:16.891Z",
+				"4.17.19": "2019-02-20T15:42:16.891Z",
 				"4.17.20": "2020-02-20T15:42:16.891Z",
 				"4.17.21": "2021-02-20T15:42:16.891Z"
 			},
-			"versions": {"4.17.20": {}, "4.17.21": {}},
+			"versions": {
+				"4.17.19": {},
+				"4.17.20": {"scripts": {"test": "go test ./..."}},
+				"4.17.21": {"scripts": {"postinstall": "node setup.js"}}
+			},
 			"homepage": "https://lodash.com/",
 			"repository": {"url": "git+https://github.com/lodash/lodash.git"},
 			"bugs": {"url": "https://github.com/lodash/lodash/issues"}
@@ -44,7 +49,7 @@ func TestFetchMetadata(t *testing.T) {
 		t.Fatalf("FetchMetadata returned error: %v", err)
 	}
 
-	if report.Name != "lodash" || report.LatestVersion != "4.17.21" || report.VersionCount != 2 {
+	if report.Name != "lodash" || report.LatestVersion != "4.17.21" || report.VersionCount != 3 {
 		t.Fatalf("unexpected report: %+v", report)
 	}
 	if report.LatestPublishedAt != "2021-02-20T15:42:16.891Z" {
@@ -58,5 +63,17 @@ func TestFetchMetadata(t *testing.T) {
 	}
 	if strings.HasPrefix(report.ProjectURLs[1], "git+") {
 		t.Fatalf("repository url was not normalized: %s", report.ProjectURLs[1])
+	}
+	if report.LifecycleScripts["postinstall"] != "node setup.js" {
+		t.Fatalf("latest lifecycle scripts = %+v, want postinstall script", report.LifecycleScripts)
+	}
+	if len(report.LifecycleHistory) != 2 {
+		t.Fatalf("lifecycle history = %+v, want 2 entries", report.LifecycleHistory)
+	}
+	if report.LifecycleHistory[0].Version != "4.17.20" || report.LifecycleHistory[0].Scripts["test"] != "go test ./..." {
+		t.Fatalf("first lifecycle history entry = %+v, want 4.17.20 with test script", report.LifecycleHistory[0])
+	}
+	if report.LifecycleHistory[1].Version != "4.17.19" || !report.LifecycleHistory[1].ScriptsKnown || len(report.LifecycleHistory[1].Scripts) != 0 {
+		t.Fatalf("second lifecycle history entry = %+v, want 4.17.19 with known empty scripts", report.LifecycleHistory[1])
 	}
 }

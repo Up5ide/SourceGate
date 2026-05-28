@@ -13,6 +13,13 @@ type Finding struct {
 	Message  string
 }
 
+type VersionLifecycleScripts struct {
+	Version      string
+	PublishedAt  string
+	Scripts      map[string]string
+	ScriptsKnown bool
+}
+
 type PackageReport struct {
 	Ecosystem           string
 	Registry            string
@@ -24,6 +31,8 @@ type PackageReport struct {
 	License             string
 	Author              string
 	Maintainers         []string
+	LifecycleScripts    map[string]string
+	LifecycleHistory    []VersionLifecycleScripts
 	ProjectURLs         []string
 	CreatedAt           string
 	ModifiedAt          string

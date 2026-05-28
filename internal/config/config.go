@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,10 +18,21 @@ type Config struct {
 }
 
 type PolicyConfig struct {
-	MinimumDaysSinceLatestRelease int                 `json:"minimum_days_since_latest_release"`
-	DormantReleaseThresholdDays   int                 `json:"dormant_release_threshold_days"`
-	ProtectedPackages             map[string][]string `json:"protected_packages"`
-	ProtectedTokens               map[string][]string `json:"protected_tokens"`
+	Inform PolicyTierConfig `json:"inform"`
+	Alert  PolicyTierConfig `json:"alert"`
+	Block  PolicyTierConfig `json:"block"`
+}
+
+type PolicyTierConfig struct {
+	MinimumDaysSinceLatestRelease   int                 `json:"minimum_days_since_latest_release"`
+	DormantReleaseThresholdDays     int                 `json:"dormant_release_threshold_days"`
+	AlertOnFirstRelease             bool                `json:"alert_on_first_release"`
+	InstallLifecycleScripts         bool                `json:"install_lifecycle_scripts"`
+	InstallLifecycleHistoryVersions int                 `json:"install_lifecycle_history_versions"`
+	SuspiciousInstallScriptCommands bool                `json:"suspicious_install_script_commands"`
+	InstallScriptAddedAfterDormancy bool                `json:"install_script_added_after_dormancy"`
+	ProtectedPackages               map[string][]string `json:"protected_packages"`
+	ProtectedTokens                 map[string][]string `json:"protected_tokens"`
 }
 
 func Load(path string) (Config, error) {
@@ -33,23 +45,44 @@ func Load(path string) (Config, error) {
 	}
 
 	var config Config
-	if err := json.Unmarshal(data, &config); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&config); err != nil {
 		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
-	if config.Policy.MinimumDaysSinceLatestRelease < 0 {
-		return Config{}, fmt.Errorf("minimum_days_since_latest_release cannot be negative")
-	}
-	if config.Policy.DormantReleaseThresholdDays < 0 {
-		return Config{}, fmt.Errorf("dormant_release_threshold_days cannot be negative")
-	}
-	if err := validateEcosystemListMap("protected_packages", config.Policy.ProtectedPackages); err != nil {
-		return Config{}, err
-	}
-	if err := validateEcosystemListMap("protected_tokens", config.Policy.ProtectedTokens); err != nil {
-		return Config{}, err
+	for _, tier := range []struct {
+		name   string
+		policy PolicyTierConfig
+	}{
+		{name: "inform", policy: config.Policy.Inform},
+		{name: "alert", policy: config.Policy.Alert},
+		{name: "block", policy: config.Policy.Block},
+	} {
+		if err := validatePolicyTier(tier.name, tier.policy); err != nil {
+			return Config{}, err
+		}
 	}
 
 	return config, nil
+}
+
+func validatePolicyTier(tier string, policy PolicyTierConfig) error {
+	if policy.MinimumDaysSinceLatestRelease < 0 {
+		return fmt.Errorf("policy.%s.minimum_days_since_latest_release cannot be negative", tier)
+	}
+	if policy.DormantReleaseThresholdDays < 0 {
+		return fmt.Errorf("policy.%s.dormant_release_threshold_days cannot be negative", tier)
+	}
+	if policy.InstallLifecycleHistoryVersions < 0 {
+		return fmt.Errorf("policy.%s.install_lifecycle_history_versions cannot be negative", tier)
+	}
+	if err := validateEcosystemListMap("policy."+tier+".protected_packages", policy.ProtectedPackages); err != nil {
+		return err
+	}
+	if err := validateEcosystemListMap("policy."+tier+".protected_tokens", policy.ProtectedTokens); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateEcosystemListMap(field string, values map[string][]string) error {
