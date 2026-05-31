@@ -8,6 +8,7 @@ import (
 	"github.com/sourcegate/sourcegate/internal/checks/firstrelease"
 	"github.com/sourcegate/sourcegate/internal/checks/installlifecycle"
 	"github.com/sourcegate/sourcegate/internal/checks/namesquat"
+	"github.com/sourcegate/sourcegate/internal/checks/pypiartifacts"
 	"github.com/sourcegate/sourcegate/internal/checks/releaseage"
 	"github.com/sourcegate/sourcegate/internal/config"
 	"github.com/sourcegate/sourcegate/internal/report"
@@ -81,6 +82,36 @@ func Evaluate(pkg *report.PackageReport, cfg config.Config, now time.Time) {
 		}
 		return installlifecycle.CheckDormantAdded(*pkg, policy.InstallLifecycleHistoryVersions, policy.DormantReleaseThresholdDays)
 	})...)
+	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
+		if !policy.PyPIArtifactShapeChange {
+			return nil
+		}
+		return pypiartifacts.CheckArtifactShapeChange(*pkg, policy.PyPIArtifactHistoryVersions)
+	})...)
+	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
+		if policy.PyPIFileSizeJumpPercent <= 0 {
+			return nil
+		}
+		return pypiartifacts.CheckFileSizeJump(*pkg, policy.PyPIArtifactHistoryVersions, policy.PyPIFileSizeJumpPercent)
+	})...)
+	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
+		if !policy.PyPIDependencyChange {
+			return nil
+		}
+		return pypiartifacts.CheckDependencyChange(*pkg, policy.PyPIArtifactHistoryVersions)
+	})...)
+	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
+		if !policy.PyPIProvenanceRequired {
+			return nil
+		}
+		return pypiartifacts.CheckProvenanceRequired(*pkg)
+	})...)
+	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
+		if !policy.PyPIReleaseFileCountChange {
+			return nil
+		}
+		return pypiartifacts.CheckReleaseFileCountChange(*pkg, policy.PyPIArtifactHistoryVersions)
+	})...)
 
 	pkg.Decision = report.DecisionAllow
 }
@@ -118,6 +149,12 @@ func policyTierEnabled(policy config.PolicyTierConfig) bool {
 		policy.InstallLifecycleHistoryVersions > 0 ||
 		policy.SuspiciousInstallScriptCommands ||
 		policy.InstallScriptAddedAfterDormancy ||
+		policy.PyPIArtifactHistoryVersions > 0 ||
+		policy.PyPIArtifactShapeChange ||
+		policy.PyPIFileSizeJumpPercent > 0 ||
+		policy.PyPIDependencyChange ||
+		policy.PyPIProvenanceRequired ||
+		policy.PyPIReleaseFileCountChange ||
 		hasProtectedNamePolicy(policy)
 }
 
@@ -188,6 +225,30 @@ func policyTierSummary(policy config.PolicyTierConfig) string {
 	}
 	if policy.InstallScriptAddedAfterDormancy {
 		summaries = append(summaries, "dormant npm install script addition checks enabled")
+	}
+	if policy.PyPIArtifactHistoryVersions > 0 {
+		summaries = append(
+			summaries,
+			fmt.Sprintf("PyPI artifact history checks compare previous %d version(s)", policy.PyPIArtifactHistoryVersions),
+		)
+	}
+	if policy.PyPIArtifactShapeChange {
+		summaries = append(summaries, "PyPI artifact shape change checks enabled")
+	}
+	if policy.PyPIFileSizeJumpPercent > 0 {
+		summaries = append(
+			summaries,
+			fmt.Sprintf("PyPI file size jump threshold is %d%% of historical median", policy.PyPIFileSizeJumpPercent),
+		)
+	}
+	if policy.PyPIDependencyChange {
+		summaries = append(summaries, "PyPI dependency change checks enabled")
+	}
+	if policy.PyPIProvenanceRequired {
+		summaries = append(summaries, "PyPI provenance availability checks enabled")
+	}
+	if policy.PyPIReleaseFileCountChange {
+		summaries = append(summaries, "PyPI release file count change checks enabled")
 	}
 	return joinPolicySummaries(summaries)
 }

@@ -20,6 +20,29 @@ type VersionLifecycleScripts struct {
 	ScriptsKnown bool
 }
 
+type PyPIReleaseFile struct {
+	Filename            string
+	PackageType         string
+	PythonVersion       string
+	Size                int64
+	UploadedAt          string
+	RequiresPython      string
+	Digests             map[string]string
+	Yanked              bool
+	YankedReason        string
+	ProvenanceChecked   bool
+	ProvenanceAvailable bool
+	ProvenanceError     string
+}
+
+type PyPIReleaseInfo struct {
+	Version           string
+	PublishedAt       string
+	Files             []PyPIReleaseFile
+	Dependencies      []string
+	DependenciesKnown bool
+}
+
 type PackageReport struct {
 	Ecosystem           string
 	Registry            string
@@ -33,6 +56,8 @@ type PackageReport struct {
 	Maintainers         []string
 	LifecycleScripts    map[string]string
 	LifecycleHistory    []VersionLifecycleScripts
+	PyPILatestRelease   PyPIReleaseInfo
+	PyPIReleaseHistory  []PyPIReleaseInfo
 	ProjectURLs         []string
 	CreatedAt           string
 	ModifiedAt          string

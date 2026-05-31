@@ -18,6 +18,12 @@ func TestLoad(t *testing.T) {
 				"install_lifecycle_history_versions": 0,
 				"suspicious_install_script_commands": false,
 				"install_script_added_after_dormancy": false,
+				"pypi_artifact_history_versions": 0,
+				"pypi_artifact_shape_change": false,
+				"pypi_file_size_jump_percent": 0,
+				"pypi_dependency_change": false,
+				"pypi_provenance_required": false,
+				"pypi_release_file_count_change": false,
 				"protected_packages": {},
 				"protected_tokens": {}
 			},
@@ -29,6 +35,12 @@ func TestLoad(t *testing.T) {
 				"install_lifecycle_history_versions": 5,
 				"suspicious_install_script_commands": false,
 				"install_script_added_after_dormancy": true,
+				"pypi_artifact_history_versions": 5,
+				"pypi_artifact_shape_change": true,
+				"pypi_file_size_jump_percent": 300,
+				"pypi_dependency_change": true,
+				"pypi_provenance_required": true,
+				"pypi_release_file_count_change": true,
 				"protected_packages": {
 					"npm": ["react", "lodash"],
 					"pypi": ["requests", "django"]
@@ -46,6 +58,12 @@ func TestLoad(t *testing.T) {
 				"install_lifecycle_history_versions": 0,
 				"suspicious_install_script_commands": true,
 				"install_script_added_after_dormancy": false,
+				"pypi_artifact_history_versions": 0,
+				"pypi_artifact_shape_change": false,
+				"pypi_file_size_jump_percent": 0,
+				"pypi_dependency_change": false,
+				"pypi_provenance_required": false,
+				"pypi_release_file_count_change": false,
 				"protected_packages": {},
 				"protected_tokens": {}
 			}
@@ -80,6 +98,24 @@ func TestLoad(t *testing.T) {
 	if !config.Policy.Alert.InstallScriptAddedAfterDormancy {
 		t.Fatalf("alert install script added after dormancy = false, want true")
 	}
+	if config.Policy.Alert.PyPIArtifactHistoryVersions != 5 {
+		t.Fatalf("alert pypi artifact history versions = %d, want 5", config.Policy.Alert.PyPIArtifactHistoryVersions)
+	}
+	if !config.Policy.Alert.PyPIArtifactShapeChange {
+		t.Fatalf("alert pypi artifact shape change = false, want true")
+	}
+	if config.Policy.Alert.PyPIFileSizeJumpPercent != 300 {
+		t.Fatalf("alert pypi file size jump percent = %d, want 300", config.Policy.Alert.PyPIFileSizeJumpPercent)
+	}
+	if !config.Policy.Alert.PyPIDependencyChange {
+		t.Fatalf("alert pypi dependency change = false, want true")
+	}
+	if !config.Policy.Alert.PyPIProvenanceRequired {
+		t.Fatalf("alert pypi provenance required = false, want true")
+	}
+	if !config.Policy.Alert.PyPIReleaseFileCountChange {
+		t.Fatalf("alert pypi release file count change = false, want true")
+	}
 	if config.Policy.Block.DormantReleaseThresholdDays != 365 {
 		t.Fatalf("block dormant threshold days = %d, want 365", config.Policy.Block.DormantReleaseThresholdDays)
 	}
@@ -105,6 +141,52 @@ func TestLoadMissingFileReturnsDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsFalseForIntegerAndMapOptions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sourcegate.config.json")
+	if err := os.WriteFile(path, []byte(`{
+		"policy": {
+			"alert": {
+				"minimum_days_since_latest_release": false,
+				"dormant_release_threshold_days": false,
+				"install_lifecycle_history_versions": false,
+				"pypi_artifact_history_versions": false,
+				"pypi_file_size_jump_percent": false,
+				"protected_packages": false,
+				"protected_tokens": false
+			}
+		}
+	}`), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	config, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if config.Policy.Alert.MinimumDaysSinceLatestRelease != 0 {
+		t.Fatalf("minimum days = %d, want 0", config.Policy.Alert.MinimumDaysSinceLatestRelease)
+	}
+	if config.Policy.Alert.DormantReleaseThresholdDays != 0 {
+		t.Fatalf("dormant days = %d, want 0", config.Policy.Alert.DormantReleaseThresholdDays)
+	}
+	if config.Policy.Alert.InstallLifecycleHistoryVersions != 0 {
+		t.Fatalf("lifecycle history versions = %d, want 0", config.Policy.Alert.InstallLifecycleHistoryVersions)
+	}
+	if config.Policy.Alert.PyPIArtifactHistoryVersions != 0 {
+		t.Fatalf("pypi artifact history versions = %d, want 0", config.Policy.Alert.PyPIArtifactHistoryVersions)
+	}
+	if config.Policy.Alert.PyPIFileSizeJumpPercent != 0 {
+		t.Fatalf("pypi file size jump percent = %d, want 0", config.Policy.Alert.PyPIFileSizeJumpPercent)
+	}
+	if len(config.Policy.Alert.ProtectedPackages) != 0 {
+		t.Fatalf("protected packages = %v, want empty map", config.Policy.Alert.ProtectedPackages)
+	}
+	if len(config.Policy.Alert.ProtectedTokens) != 0 {
+		t.Fatalf("protected tokens = %v, want empty map", config.Policy.Alert.ProtectedTokens)
+	}
+}
+
 func TestLoadRejectsInvalidProtectedNameConfig(t *testing.T) {
 	cases := map[string]string{
 		"unsupported package ecosystem": `{"policy":{"alert":{"protected_packages":{"cargo":["serde"]}}}}`,
@@ -127,11 +209,37 @@ func TestLoadRejectsInvalidProtectedNameConfig(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsInvalidFlexiblePolicyValueTypes(t *testing.T) {
+	cases := map[string]string{
+		"string integer": `{"policy":{"alert":{"minimum_days_since_latest_release":"3"}}}`,
+		"true integer":   `{"policy":{"alert":{"pypi_file_size_jump_percent":true}}}`,
+		"array map":      `{"policy":{"alert":{"protected_packages":[]}}}`,
+		"string map":     `{"policy":{"alert":{"protected_tokens":"npm"}}}`,
+		"number bool":    `{"policy":{"alert":{"pypi_dependency_change":1}}}`,
+		"unknown field":  `{"policy":{"alert":{"does_not_exist":false}}}`,
+	}
+
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sourcegate.config.json")
+			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			if _, err := Load(path); err == nil {
+				t.Fatalf("Load returned nil error")
+			}
+		})
+	}
+}
+
 func TestLoadRejectsNegativeTierThresholds(t *testing.T) {
 	cases := map[string]string{
 		"negative release age":                `{"policy":{"alert":{"minimum_days_since_latest_release":-1}}}`,
 		"negative dormant":                    `{"policy":{"block":{"dormant_release_threshold_days":-1}}}`,
 		"negative lifecycle history versions": `{"policy":{"inform":{"install_lifecycle_history_versions":-1}}}`,
+		"negative pypi history versions":      `{"policy":{"alert":{"pypi_artifact_history_versions":-1}}}`,
+		"negative pypi size jump percent":     `{"policy":{"block":{"pypi_file_size_jump_percent":-1}}}`,
 	}
 
 	for name, content := range cases {

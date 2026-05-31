@@ -42,7 +42,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
-	adapter, err := a.adapterFor(req.Ecosystem)
+	adapter, err := a.adapterFor(req.Ecosystem, cfg)
 	if err != nil {
 		return err
 	}
@@ -57,15 +57,34 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	return nil
 }
 
-func (a *App) adapterFor(ecosystemKey ecosystem.Ecosystem) (ecosystem.Adapter, error) {
+func (a *App) adapterFor(ecosystemKey ecosystem.Ecosystem, cfg config.Config) (ecosystem.Adapter, error) {
 	switch ecosystemKey {
 	case ecosystem.NPM:
 		return npm.New(a.client), nil
 	case ecosystem.PyPI:
-		return pypi.New(a.client), nil
+		return pypi.NewWithOptions(a.client, pypi.Options{
+			HistoryVersions: maxPyPIArtifactHistoryVersions(cfg.Policy),
+			CheckProvenance: anyPyPIProvenanceRequired(cfg.Policy),
+		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported ecosystem: %s", ecosystemKey)
 	}
+}
+
+func maxPyPIArtifactHistoryVersions(policy config.PolicyConfig) int {
+	max := 0
+	for _, tier := range []config.PolicyTierConfig{policy.Inform, policy.Alert, policy.Block} {
+		if tier.PyPIArtifactHistoryVersions > max {
+			max = tier.PyPIArtifactHistoryVersions
+		}
+	}
+	return max
+}
+
+func anyPyPIProvenanceRequired(policy config.PolicyConfig) bool {
+	return policy.Inform.PyPIProvenanceRequired ||
+		policy.Alert.PyPIProvenanceRequired ||
+		policy.Block.PyPIProvenanceRequired
 }
 
 func printUsage(w io.Writer) {
