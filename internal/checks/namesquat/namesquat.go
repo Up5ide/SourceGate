@@ -10,6 +10,13 @@ import (
 )
 
 func Check(pkg report.PackageReport, policy config.PolicyTierConfig) []report.Finding {
+	var findings []report.Finding
+	findings = append(findings, CheckProtectedPackages(pkg, policy)...)
+	findings = append(findings, CheckProtectedTokens(pkg, policy)...)
+	return findings
+}
+
+func CheckProtectedPackages(pkg report.PackageReport, policy config.PolicyTierConfig) []report.Finding {
 	ecosystemKey := reportEcosystemKey(pkg)
 	if ecosystemKey == "" {
 		return nil
@@ -17,11 +24,18 @@ func Check(pkg report.PackageReport, policy config.PolicyTierConfig) []report.Fi
 
 	packageName := NormalizePackageName(ecosystemKey, pkg.Name)
 	protectedPackages := normalizedSet(ecosystemKey, policy.ProtectedPackages[ecosystemKey])
+	return protectedPackageTypos(packageName, protectedPackages)
+}
 
-	var findings []report.Finding
-	findings = append(findings, protectedPackageTypos(packageName, protectedPackages)...)
-	findings = append(findings, protectedTokenUse(packageName, protectedPackages, policy.ProtectedTokens[ecosystemKey])...)
-	return findings
+func CheckProtectedTokens(pkg report.PackageReport, policy config.PolicyTierConfig) []report.Finding {
+	ecosystemKey := reportEcosystemKey(pkg)
+	if ecosystemKey == "" {
+		return nil
+	}
+
+	packageName := NormalizePackageName(ecosystemKey, pkg.Name)
+	protectedPackages := normalizedSet(ecosystemKey, policy.ProtectedPackages[ecosystemKey])
+	return protectedTokenUse(packageName, protectedPackages, policy.ProtectedTokens[ecosystemKey])
 }
 
 func protectedPackageTypos(packageName string, protectedPackages map[string]struct{}) []report.Finding {

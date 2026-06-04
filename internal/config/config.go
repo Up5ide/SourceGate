@@ -14,7 +14,15 @@ import (
 const DefaultPath = "sourcegate.config.json"
 
 type Config struct {
-	Policy PolicyConfig `json:"policy"`
+	Policy      PolicyConfig      `json:"policy"`
+	PyPIRuntime PyPIRuntimeConfig `json:"pypi_runtime,omitempty"`
+}
+
+type PyPIRuntimeConfig struct {
+	TargetPlatform string   `json:"target_platform,omitempty"`
+	PythonVersion  string   `json:"python_version,omitempty"`
+	Implementation string   `json:"implementation,omitempty"`
+	ABIs           []string `json:"abis,omitempty"`
 }
 
 type PolicyConfig struct {
@@ -36,6 +44,8 @@ type PolicyTierConfig struct {
 	PyPIFileSizeJumpPercent         int                 `json:"pypi_file_size_jump_percent"`
 	PyPIDependencyChange            bool                `json:"pypi_dependency_change"`
 	PyPIProvenanceRequired          bool                `json:"pypi_provenance_required"`
+	PyPIProvenanceScope             string              `json:"pypi_provenance_scope"`
+	PyPIIncludeOptionalDependencies bool                `json:"pypi_include_optional_dependencies"`
 	PyPIReleaseFileCountChange      bool                `json:"pypi_release_file_count_change"`
 	ProtectedPackages               map[string][]string `json:"protected_packages"`
 	ProtectedTokens                 map[string][]string `json:"protected_tokens"`
@@ -74,6 +84,10 @@ func (policy *PolicyTierConfig) UnmarshalJSON(data []byte) error {
 			policy.PyPIDependencyChange, err = boolValue(field, raw)
 		case "pypi_provenance_required":
 			policy.PyPIProvenanceRequired, err = boolValue(field, raw)
+		case "pypi_provenance_scope":
+			policy.PyPIProvenanceScope, err = stringOrFalse(field, raw)
+		case "pypi_include_optional_dependencies":
+			policy.PyPIIncludeOptionalDependencies, err = boolValue(field, raw)
 		case "pypi_release_file_count_change":
 			policy.PyPIReleaseFileCountChange, err = boolValue(field, raw)
 		case "protected_packages":
@@ -110,6 +124,18 @@ func boolValue(field string, raw json.RawMessage) (bool, error) {
 	return value, nil
 }
 
+func stringOrFalse(field string, raw json.RawMessage) (string, error) {
+	if isJSONFalse(raw) {
+		return "", nil
+	}
+
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fmt.Errorf("%s must be a string or false", field)
+	}
+	return strings.TrimSpace(value), nil
+}
+
 func ecosystemListMapOrFalse(field string, raw json.RawMessage) (map[string][]string, error) {
 	if isJSONFalse(raw) {
 		return map[string][]string{}, nil
@@ -144,6 +170,9 @@ func Load(path string) (Config, error) {
 	if err := decoder.Decode(&config); err != nil {
 		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	if err := validatePyPIRuntime(config.PyPIRuntime); err != nil {
+		return Config{}, err
+	}
 	for _, tier := range []struct {
 		name   string
 		policy PolicyTierConfig
@@ -176,11 +205,47 @@ func validatePolicyTier(tier string, policy PolicyTierConfig) error {
 	if policy.PyPIFileSizeJumpPercent < 0 {
 		return fmt.Errorf("policy.%s.pypi_file_size_jump_percent cannot be negative", tier)
 	}
+	if err := validatePyPIProvenanceScope(tier, policy); err != nil {
+		return err
+	}
 	if err := validateEcosystemListMap("policy."+tier+".protected_packages", policy.ProtectedPackages); err != nil {
 		return err
 	}
 	if err := validateEcosystemListMap("policy."+tier+".protected_tokens", policy.ProtectedTokens); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validatePyPIRuntime(runtime PyPIRuntimeConfig) error {
+	for field, value := range map[string]string{
+		"target_platform": runtime.TargetPlatform,
+		"python_version":  runtime.PythonVersion,
+		"implementation":  runtime.Implementation,
+	} {
+		if value != "" && strings.TrimSpace(value) == "" {
+			return fmt.Errorf("pypi_runtime.%s cannot be empty", field)
+		}
+	}
+	for _, abi := range runtime.ABIs {
+		if strings.TrimSpace(abi) == "" {
+			return fmt.Errorf("pypi_runtime.abis contains an empty value")
+		}
+	}
+	return nil
+}
+
+func validatePyPIProvenanceScope(tier string, policy PolicyTierConfig) error {
+	switch policy.PyPIProvenanceScope {
+	case "", "install-target", "all-artifacts", "sdist-only":
+	default:
+		return fmt.Errorf("policy.%s.pypi_provenance_scope must be false, install-target, all-artifacts, or sdist-only", tier)
+	}
+	if policy.PyPIProvenanceRequired && policy.PyPIProvenanceScope == "" {
+		return fmt.Errorf("policy.%s.pypi_provenance_scope must be configured when pypi_provenance_required is true", tier)
+	}
+	if !policy.PyPIProvenanceRequired && policy.PyPIProvenanceScope != "" {
+		return fmt.Errorf("policy.%s.pypi_provenance_scope must be false when pypi_provenance_required is false", tier)
 	}
 	return nil
 }

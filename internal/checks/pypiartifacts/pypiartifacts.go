@@ -69,8 +69,25 @@ func CheckFileSizeJump(pkg report.PackageReport, historyVersions int, jumpPercen
 		return nil
 	}
 
+	latestTotal, latestLargest, historicalMedianTotal, historicalMedianLargest := fileSizeStats(pkg, historyVersions)
+	var findings []report.Finding
+	if historicalMedianTotal > 0 && latestTotal*100 >= historicalMedianTotal*int64(100+jumpPercent) {
+		findings = append(findings, report.Finding{
+			Message: fmt.Sprintf("latest PyPI release total file size is %d bytes, increased by at least %d%% over historical median %d bytes", latestTotal, jumpPercent, historicalMedianTotal),
+		})
+	}
+	if historicalMedianLargest > 0 && latestLargest*100 >= historicalMedianLargest*int64(100+jumpPercent) {
+		findings = append(findings, report.Finding{
+			Message: fmt.Sprintf("latest PyPI release largest file is %d bytes, increased by at least %d%% over historical median largest file %d bytes", latestLargest, jumpPercent, historicalMedianLargest),
+		})
+	}
+	return findings
+}
+
+func fileSizeStats(pkg report.PackageReport, historyVersions int) (int64, int64, int64, int64) {
 	latestTotal := totalSize(pkg.PyPILatestRelease.Files)
 	latestLargest := largestSize(pkg.PyPILatestRelease.Files)
+	history := limitedHistory(pkg.PyPIReleaseHistory, historyVersions)
 	historyTotals := make([]int64, 0, len(history))
 	historyLargest := make([]int64, 0, len(history))
 	for _, release := range history {
@@ -80,83 +97,119 @@ func CheckFileSizeJump(pkg report.PackageReport, historyVersions int, jumpPercen
 		historyTotals = append(historyTotals, totalSize(release.Files))
 		historyLargest = append(historyLargest, largestSize(release.Files))
 	}
-
-	var findings []report.Finding
-	if median := medianInt64(historyTotals); median > 0 && latestTotal*100 >= median*int64(jumpPercent) {
-		findings = append(findings, report.Finding{
-			Message: fmt.Sprintf("latest PyPI release total file size is %d bytes, at least %d%% of historical median %d bytes", latestTotal, jumpPercent, median),
-		})
-	}
-	if median := medianInt64(historyLargest); median > 0 && latestLargest*100 >= median*int64(jumpPercent) {
-		findings = append(findings, report.Finding{
-			Message: fmt.Sprintf("latest PyPI release largest file is %d bytes, at least %d%% of historical median largest file %d bytes", latestLargest, jumpPercent, median),
-		})
-	}
-	return findings
+	return latestTotal, latestLargest, medianInt64(historyTotals), medianInt64(historyLargest)
 }
 
-func CheckDependencyChange(pkg report.PackageReport, historyVersions int) []report.Finding {
+func CheckDependencyChange(pkg report.PackageReport, historyVersions int, includeOptional bool) []report.Finding {
 	if !isPyPI(pkg) || historyVersions <= 0 {
 		return nil
 	}
 
-	if !pkg.PyPILatestRelease.DependenciesKnown {
+	comparison := compareDependencies(pkg, historyVersions, includeOptional)
+	if !comparison.latestKnown {
 		return []report.Finding{{Message: "latest PyPI dependency metadata is unavailable or dynamic; dependency changes cannot be confirmed"}}
 	}
-
-	var previous report.PyPIReleaseInfo
-	foundPrevious := false
-	for _, release := range limitedHistory(pkg.PyPIReleaseHistory, historyVersions) {
-		if release.DependenciesKnown {
-			previous = release
-			foundPrevious = true
-			break
-		}
-	}
-	if !foundPrevious {
+	if !comparison.previousKnown {
 		return []report.Finding{{Message: "previous PyPI dependency metadata is unavailable; dependency changes cannot be confirmed"}}
 	}
 
-	latestDeps := stringSet(pkg.PyPILatestRelease.Dependencies)
-	previousDeps := stringSet(previous.Dependencies)
-	added := sortedDifference(latestDeps, previousDeps)
-	removed := sortedDifference(previousDeps, latestDeps)
-
 	var findings []report.Finding
-	if len(added) > 0 {
+	if len(comparison.added) > 0 {
 		findings = append(findings, report.Finding{
-			Message: fmt.Sprintf("latest PyPI release adds declared dependency name(s): %s", strings.Join(added, ", ")),
+			Message: fmt.Sprintf("latest PyPI release adds declared dependency name(s): %s", strings.Join(comparison.added, ", ")),
 		})
 	}
-	if len(removed) > 0 {
+	if len(comparison.removed) > 0 {
 		findings = append(findings, report.Finding{
-			Message: fmt.Sprintf("latest PyPI release removes declared dependency name(s): %s", strings.Join(removed, ", ")),
+			Message: fmt.Sprintf("latest PyPI release removes declared dependency name(s): %s", strings.Join(comparison.removed, ", ")),
 		})
 	}
 	return findings
 }
 
-func CheckProvenanceRequired(pkg report.PackageReport) []report.Finding {
+type dependencyComparison struct {
+	latestKnown     bool
+	previousKnown   bool
+	previousVersion string
+	added           []string
+	removed         []string
+	requiredAdded   []string
+	requiredRemoved []string
+	optionalAdded   []string
+	optionalRemoved []string
+}
+
+func compareDependencies(pkg report.PackageReport, historyVersions int, includeOptional bool) dependencyComparison {
+	comparison := dependencyComparison{latestKnown: pkg.PyPILatestRelease.DependenciesKnown}
+	if !comparison.latestKnown {
+		return comparison
+	}
+
+	var previous report.PyPIReleaseInfo
+	for _, release := range limitedHistory(pkg.PyPIReleaseHistory, historyVersions) {
+		if release.DependenciesKnown {
+			previous = release
+			comparison.previousKnown = true
+			comparison.previousVersion = release.Version
+			break
+		}
+	}
+	if !comparison.previousKnown {
+		return comparison
+	}
+
+	latestDeps := stringSet(pkg.PyPILatestRelease.Dependencies)
+	previousDeps := stringSet(previous.Dependencies)
+	comparison.requiredAdded = sortedDifference(latestDeps, previousDeps)
+	comparison.requiredRemoved = sortedDifference(previousDeps, latestDeps)
+	comparison.added = append([]string(nil), comparison.requiredAdded...)
+	comparison.removed = append([]string(nil), comparison.requiredRemoved...)
+	if includeOptional {
+		latestOptional := stringSet(pkg.PyPILatestRelease.OptionalDependencies)
+		previousOptional := stringSet(previous.OptionalDependencies)
+		comparison.optionalAdded = sortedDifference(latestOptional, previousOptional)
+		comparison.optionalRemoved = sortedDifference(previousOptional, latestOptional)
+		comparison.added = sortedUniqueStrings(append(comparison.added, comparison.optionalAdded...))
+		comparison.removed = sortedUniqueStrings(append(comparison.removed, comparison.optionalRemoved...))
+	}
+	return comparison
+}
+
+func CheckProvenanceRequired(pkg report.PackageReport, scope string) []report.Finding {
 	if !isPyPI(pkg) {
 		return nil
 	}
 
-	var findings []report.Finding
+	eligible := 0
+	missing := 0
+	unknown := 0
 	for _, file := range pkg.PyPILatestRelease.Files {
+		if !provenanceFileInScope(file, scope) {
+			continue
+		}
+		eligible++
 		switch {
 		case !file.ProvenanceChecked:
-			findings = append(findings, report.Finding{
-				Message: fmt.Sprintf("PyPI provenance availability was not checked for release file %q", file.Filename),
-			})
+			unknown++
 		case file.ProvenanceError != "":
-			findings = append(findings, report.Finding{
-				Message: fmt.Sprintf("PyPI provenance availability is unknown for release file %q: %s", file.Filename, file.ProvenanceError),
-			})
+			unknown++
 		case !file.ProvenanceAvailable:
-			findings = append(findings, report.Finding{
-				Message: fmt.Sprintf("PyPI release file %q has no provenance available", file.Filename),
-			})
+			missing++
 		}
+	}
+	var findings []report.Finding
+	if eligible == 0 {
+		return []report.Finding{{Message: fmt.Sprintf("PyPI provenance scope %q selected no latest-release files", scope)}}
+	}
+	if missing > 0 {
+		findings = append(findings, report.Finding{
+			Message: fmt.Sprintf("%d PyPI release file(s) in provenance scope %q have no provenance available", missing, scope),
+		})
+	}
+	if unknown > 0 {
+		findings = append(findings, report.Finding{
+			Message: fmt.Sprintf("PyPI provenance availability is unknown for %d release file(s) in provenance scope %q", unknown, scope),
+		})
 	}
 	return findings
 }
@@ -166,6 +219,17 @@ func CheckReleaseFileCountChange(pkg report.PackageReport, historyVersions int) 
 		return nil
 	}
 
+	latestCount, historicalMedian := releaseFileCountStats(pkg, historyVersions)
+	if historicalMedian == 0 || latestCount == historicalMedian {
+		return nil
+	}
+
+	return []report.Finding{{
+		Message: fmt.Sprintf("latest PyPI release has %d file(s), different from historical median of %d file(s)", latestCount, historicalMedian),
+	}}
+}
+
+func releaseFileCountStats(pkg report.PackageReport, historyVersions int) (int, int) {
 	history := limitedHistory(pkg.PyPIReleaseHistory, historyVersions)
 	counts := make([]int, 0, len(history))
 	for _, release := range history {
@@ -173,14 +237,7 @@ func CheckReleaseFileCountChange(pkg report.PackageReport, historyVersions int) 
 			counts = append(counts, len(release.Files))
 		}
 	}
-	median := medianInt(counts)
-	if median == 0 || len(pkg.PyPILatestRelease.Files) == median {
-		return nil
-	}
-
-	return []report.Finding{{
-		Message: fmt.Sprintf("latest PyPI release has %d file(s), different from historical median of %d file(s)", len(pkg.PyPILatestRelease.Files), median),
-	}}
+	return len(pkg.PyPILatestRelease.Files), medianInt(counts)
 }
 
 type artifactShape struct {
@@ -326,6 +383,28 @@ func displaySet(values []string) string {
 		return "none"
 	}
 	return strings.Join(values, ", ")
+}
+
+func provenanceFileInScope(file report.PyPIReleaseFile, scope string) bool {
+	if scope == "" {
+		return true
+	}
+	for _, fileScope := range file.ProvenanceScopes {
+		if fileScope == scope {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedUniqueStrings(values []string) []string {
+	set := stringSet(values)
+	result := make([]string, 0, len(set))
+	for value := range set {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func isPyPI(pkg report.PackageReport) bool {

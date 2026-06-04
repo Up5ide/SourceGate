@@ -16,6 +16,7 @@ For non-boolean options, `false` is normalized to that option's neutral value wh
 
 - integer options become `0`
 - map options become `{}`
+- string scope options become an empty disabled value
 - boolean options remain `false`
 
 If an option is `false`, SourceGate does not run the rule controlled by that option.
@@ -38,6 +39,8 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
       "pypi_file_size_jump_percent": false,
       "pypi_dependency_change": false,
       "pypi_provenance_required": false,
+      "pypi_provenance_scope": false,
+      "pypi_include_optional_dependencies": false,
       "pypi_release_file_count_change": false,
       "protected_packages": false,
       "protected_tokens": false
@@ -55,15 +58,14 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
       "pypi_file_size_jump_percent": 300,
       "pypi_dependency_change": true,
       "pypi_provenance_required": true,
+      "pypi_provenance_scope": "install-target",
+      "pypi_include_optional_dependencies": false,
       "pypi_release_file_count_change": true,
       "protected_packages": {
         "npm": ["react", "lodash", "@tanstack/react-query"],
         "pypi": ["requests", "django"]
       },
-      "protected_tokens": {
-        "npm": ["tanstack", "aws", "babel"],
-        "pypi": ["django", "pytest"]
-      }
+      "protected_tokens": false
     },
     "block": {
       "minimum_days_since_latest_release": false,
@@ -78,10 +80,18 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
       "pypi_file_size_jump_percent": false,
       "pypi_dependency_change": false,
       "pypi_provenance_required": false,
+      "pypi_provenance_scope": false,
+      "pypi_include_optional_dependencies": false,
       "pypi_release_file_count_change": false,
       "protected_packages": false,
       "protected_tokens": false
     }
+  },
+  "pypi_runtime": {
+    "target_platform": "linux_x86_64",
+    "python_version": "3.12",
+    "implementation": "cp",
+    "abis": ["cp312"]
   }
 }
 ```
@@ -99,9 +109,11 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 | `install_script_added_after_dormancy` | boolean | `true` enables dormant-release npm lifecycle addition findings. |
 | `pypi_artifact_history_versions` | integer or `false` | Number of previous PyPI releases to compare; `false` disables history-dependent PyPI checks. |
 | `pypi_artifact_shape_change` | boolean | `true` enables PyPI artifact shape change findings. |
-| `pypi_file_size_jump_percent` | integer or `false` | Percentage threshold for size jumps; `false` disables size-jump checks. |
+| `pypi_file_size_jump_percent` | integer or `false` | Percentage increase threshold for size jumps; `false` disables size-jump checks. |
 | `pypi_dependency_change` | boolean | `true` enables PyPI dependency change findings. |
 | `pypi_provenance_required` | boolean | `true` requires latest PyPI release file provenance to be available. |
+| `pypi_provenance_scope` | string or `false` | Required with `pypi_provenance_required`; accepts `install-target`, `all-artifacts`, or `sdist-only`. |
+| `pypi_include_optional_dependencies` | boolean | Include PyPI optional `extra` dependency names in dependency-change evaluation. |
 | `pypi_release_file_count_change` | boolean | `true` enables PyPI release file count change findings. |
 | `protected_packages` | map or `false` | Map keyed by ecosystem; `false` disables protected package checks for the tier. |
 | `protected_tokens` | map or `false` | Map keyed by ecosystem; `false` disables protected token checks for the tier. |
@@ -134,11 +146,17 @@ These checks use PyPI metadata, release-file metadata, version-specific metadata
 
 `pypi_artifact_shape_change` emits PyPI-only findings when the latest release changes artifact package types, removes wheels, becomes source-only, adds or removes sdists, or introduces new wheel platform tags.
 
-`pypi_file_size_jump_percent` emits PyPI-only findings when the latest release total size or largest file size reaches the configured percentage of the historical median.
+`pypi_file_size_jump_percent` emits PyPI-only findings when the latest release total size or largest file size increases by the configured percentage over the historical median. For example, `300` matches at four times the historical median.
 
-`pypi_dependency_change` emits PyPI-only findings when release metadata shows added or removed declared dependency names. If dependency metadata is unavailable or dynamic, SourceGate reports that the change cannot be confirmed.
+`pypi_dependency_change` emits PyPI-only findings when release metadata shows added or removed declared dependency names. Required dependencies are compared by default. Set `pypi_include_optional_dependencies` to `true` in the same tier to include optional `extra` dependencies. If dependency metadata is unavailable or dynamic, SourceGate reports that the change cannot be confirmed.
 
-`pypi_provenance_required` emits PyPI-only findings when the PyPI Integrity API reports missing provenance for latest-release files or provenance availability cannot be confirmed.
+`pypi_provenance_required` emits PyPI-only findings when the PyPI Integrity API reports missing provenance for scoped latest-release files or provenance availability cannot be confirmed. Configure the same tier's `pypi_provenance_scope` as:
+
+- `install-target`: compatible wheels plus source distributions.
+- `all-artifacts`: every latest-release artifact.
+- `sdist-only`: source distributions only.
+
+When `install-target` is enabled, SourceGate runs local `<python> -m pip debug --verbose` to resolve Python compatibility tags. It does not install packages. If tag inspection fails, SourceGate prints a non-policy warning and falls back to explicit platform filtering when configured or SourceGate host OS/architecture filtering otherwise. The fallback includes universal wheels and source distributions.
 
 `pypi_release_file_count_change` emits PyPI-only findings when the latest release file count differs from the historical median.
 
@@ -149,6 +167,27 @@ These checks use PyPI metadata, release-file metadata, version-specific metadata
 `protected_tokens` emits findings when a package uses a protected token as a separated name part, such as `tanstack-query-utils`. It does not alert on embedded strings such as `mytanstackhelper`.
 
 Both maps are keyed by ecosystem. Supported keys are `npm` and `pypi`.
+
+The checked-in defaults disable `protected_tokens`. Token policies remain available for explicit opt-in. Trusted-package exemptions and npm scoped-name handling are deferred TODOs before enabling broader defaults.
+
+## PyPI Runtime Defaults
+
+The optional top-level `pypi_runtime` block stores harmless install-target defaults:
+
+| Option | Accepted value type | Notes |
+| --- | --- | --- |
+| `target_platform` | string | Pip-compatible platform such as `linux_x86_64`, `win_amd64`, or `macosx_11_0_arm64`. |
+| `python_version` | string | Target Python version passed to `pip debug`. |
+| `implementation` | string | Target Python implementation passed to `pip debug`. |
+| `abis` | string array | ABI values passed to `pip debug`. |
+
+CLI prefix flags override matching defaults:
+
+```bash
+sourcegate --python python --target-platform linux_x86_64 --python-version 3.12 --implementation cp --abi cp312 pip install cryptography
+```
+
+`--abi` may be repeated. CLI ABI values replace the configured ABI list. SourceGate intentionally does not allow configuration files to select a Python executable because a repository-controlled path would introduce local code execution during inspection.
 
 ## Validation
 
@@ -163,3 +202,5 @@ Numeric threshold values accept non-negative integers or `false`; negative value
 - `pypi_file_size_jump_percent`
 
 `protected_packages` and `protected_tokens` only accept `npm` and `pypi` ecosystem keys, and entries cannot be empty strings.
+
+Each tier must set `pypi_provenance_scope` to `false` when `pypi_provenance_required` is `false`. When provenance is required, the tier must configure one supported scope.

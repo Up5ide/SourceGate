@@ -42,7 +42,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
-	adapter, err := a.adapterFor(req.Ecosystem, cfg)
+	adapter, err := a.adapterFor(req, cfg)
 	if err != nil {
 		return err
 	}
@@ -52,23 +52,38 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
-	checks.Evaluate(&pkg, cfg, time.Now())
+	checks.EvaluateWithOptions(&pkg, cfg, time.Now(), checks.EvaluationOptions{
+		Debug: req.Debug,
+	})
 	output.RenderHuman(a.out, pkg)
 	return nil
 }
 
-func (a *App) adapterFor(ecosystemKey ecosystem.Ecosystem, cfg config.Config) (ecosystem.Adapter, error) {
-	switch ecosystemKey {
+func (a *App) adapterFor(req cli.InstallRequest, cfg config.Config) (ecosystem.Adapter, error) {
+	switch req.Ecosystem {
 	case ecosystem.NPM:
-		return npm.New(a.client), nil
+		return npm.NewWithOptions(a.client, npm.Options{
+			HistoryVersions: maxNPMHistoryVersions(cfg.Policy),
+		}), nil
 	case ecosystem.PyPI:
 		return pypi.NewWithOptions(a.client, pypi.Options{
-			HistoryVersions: maxPyPIArtifactHistoryVersions(cfg.Policy),
-			CheckProvenance: anyPyPIProvenanceRequired(cfg.Policy),
+			HistoryVersions:  maxPyPIArtifactHistoryVersions(cfg.Policy),
+			ProvenanceScopes: pypiProvenanceScopes(cfg.Policy),
+			Target:           effectivePyPITarget(cfg.PyPIRuntime, req.PyPIRuntime),
 		}), nil
 	default:
-		return nil, fmt.Errorf("unsupported ecosystem: %s", ecosystemKey)
+		return nil, fmt.Errorf("unsupported ecosystem: %s", req.Ecosystem)
 	}
+}
+
+func maxNPMHistoryVersions(policy config.PolicyConfig) int {
+	max := 0
+	for _, tier := range []config.PolicyTierConfig{policy.Inform, policy.Alert, policy.Block} {
+		if tier.InstallLifecycleHistoryVersions > max {
+			max = tier.InstallLifecycleHistoryVersions
+		}
+	}
+	return max
 }
 
 func maxPyPIArtifactHistoryVersions(policy config.PolicyConfig) int {
@@ -81,14 +96,50 @@ func maxPyPIArtifactHistoryVersions(policy config.PolicyConfig) int {
 	return max
 }
 
-func anyPyPIProvenanceRequired(policy config.PolicyConfig) bool {
-	return policy.Inform.PyPIProvenanceRequired ||
-		policy.Alert.PyPIProvenanceRequired ||
-		policy.Block.PyPIProvenanceRequired
+func pypiProvenanceScopes(policy config.PolicyConfig) []string {
+	seen := make(map[string]struct{})
+	for _, tier := range []config.PolicyTierConfig{policy.Inform, policy.Alert, policy.Block} {
+		if tier.PyPIProvenanceRequired {
+			seen[tier.PyPIProvenanceScope] = struct{}{}
+		}
+	}
+	scopes := make([]string, 0, len(seen))
+	for scope := range seen {
+		scopes = append(scopes, scope)
+	}
+	return scopes
+}
+
+func effectivePyPITarget(runtime config.PyPIRuntimeConfig, overrides cli.PyPIRuntimeOptions) pypi.TargetOptions {
+	target := pypi.TargetOptions{
+		TargetPlatform: runtime.TargetPlatform,
+		PythonVersion:  runtime.PythonVersion,
+		Implementation: runtime.Implementation,
+		ABIs:           append([]string(nil), runtime.ABIs...),
+	}
+	if overrides.PythonExecutable != "" {
+		target.PythonExecutable = overrides.PythonExecutable
+	}
+	if overrides.TargetPlatform != "" {
+		target.TargetPlatform = overrides.TargetPlatform
+	}
+	if overrides.PythonVersion != "" {
+		target.PythonVersion = overrides.PythonVersion
+	}
+	if overrides.Implementation != "" {
+		target.Implementation = overrides.Implementation
+	}
+	if len(overrides.ABIs) > 0 {
+		target.ABIs = append([]string(nil), overrides.ABIs...)
+	}
+	return target
 }
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  sourcegate --debug npm install <package>")
+	fmt.Fprintln(w, "  sourcegate --debug pip install <package>")
+	fmt.Fprintln(w, "  sourcegate [--debug] [--python <executable>] [--target-platform <platform>] [--python-version <version>] [--implementation <name>] [--abi <abi>] pip install <package>")
 	fmt.Fprintln(w, "  sourcegate npm install <package>")
 	fmt.Fprintln(w, "  sourcegate pip install <package>")
 }

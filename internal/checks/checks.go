@@ -25,95 +25,392 @@ type policyTier struct {
 	policy config.PolicyTierConfig
 }
 
+type EvaluationOptions struct {
+	Debug bool
+}
+
 func Evaluate(pkg *report.PackageReport, cfg config.Config, now time.Time) {
+	EvaluateWithOptions(pkg, cfg, now, EvaluationOptions{})
+}
+
+func EvaluateWithOptions(pkg *report.PackageReport, cfg config.Config, now time.Time, options EvaluationOptions) {
 	pkg.Decision = report.DecisionInspectOnly
+	pkg.DebugTrace = nil
 
 	tiers := strongestFirstPolicyTiers(cfg.Policy)
-	if !policyEnabled(tiers) {
+	enabledPolicy := policyEnabled(tiers)
+	if !enabledPolicy && !options.Debug {
 		return
 	}
 
-	pkg.PolicySummary = policySummary(cfg.Policy)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if policy.MinimumDaysSinceLatestRelease <= 0 {
-			return nil
-		}
-		return releaseage.Check(*pkg, policy.MinimumDaysSinceLatestRelease, now)
-	})...)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if policy.DormantReleaseThresholdDays <= 0 {
-			return nil
-		}
-		return dormant.Check(*pkg, policy.DormantReleaseThresholdDays)
-	})...)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if !hasProtectedNamePolicy(policy) {
-			return nil
-		}
-		return namesquat.Check(*pkg, policy)
-	})...)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if !policy.AlertOnFirstRelease {
-			return nil
-		}
-		return firstrelease.Check(*pkg)
-	})...)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if !policy.InstallLifecycleScripts {
-			return nil
-		}
-		return installlifecycle.CheckDeclaredScripts(*pkg)
-	})...)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if !policy.SuspiciousInstallScriptCommands {
-			return nil
-		}
-		return installlifecycle.CheckSuspiciousCommands(*pkg)
-	})...)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if policy.InstallLifecycleHistoryVersions <= 0 {
-			return nil
-		}
-		return installlifecycle.CheckHistoryChanges(*pkg, policy.InstallLifecycleHistoryVersions)
-	})...)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if !policy.InstallScriptAddedAfterDormancy {
-			return nil
-		}
-		return installlifecycle.CheckDormantAdded(*pkg, policy.InstallLifecycleHistoryVersions, policy.DormantReleaseThresholdDays)
-	})...)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if !policy.PyPIArtifactShapeChange {
-			return nil
-		}
-		return pypiartifacts.CheckArtifactShapeChange(*pkg, policy.PyPIArtifactHistoryVersions)
-	})...)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if policy.PyPIFileSizeJumpPercent <= 0 {
-			return nil
-		}
-		return pypiartifacts.CheckFileSizeJump(*pkg, policy.PyPIArtifactHistoryVersions, policy.PyPIFileSizeJumpPercent)
-	})...)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if !policy.PyPIDependencyChange {
-			return nil
-		}
-		return pypiartifacts.CheckDependencyChange(*pkg, policy.PyPIArtifactHistoryVersions)
-	})...)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if !policy.PyPIProvenanceRequired {
-			return nil
-		}
-		return pypiartifacts.CheckProvenanceRequired(*pkg)
-	})...)
-	pkg.Findings = append(pkg.Findings, firstMatchingTierFinding(tiers, func(policy config.PolicyTierConfig) []report.Finding {
-		if !policy.PyPIReleaseFileCountChange {
-			return nil
-		}
-		return pypiartifacts.CheckReleaseFileCountChange(*pkg, policy.PyPIArtifactHistoryVersions)
-	})...)
+	if enabledPolicy {
+		pkg.PolicySummary = policySummary(cfg.Policy)
+	}
 
-	pkg.Decision = report.DecisionAllow
+	evaluate := func(check debugPolicyCheck) {
+		findings, trace := evaluatePolicyCheck(tiers, options.Debug, check)
+		pkg.Findings = append(pkg.Findings, findings...)
+		if options.Debug {
+			pkg.DebugTrace = append(pkg.DebugTrace, trace)
+		}
+	}
+
+	evaluate(debugPolicyCheck{
+		id:         "release_age",
+		applicable: true,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.MinimumDaysSinceLatestRelease > 0 }),
+		evidence: func() []string {
+			return append(releaseAgeEvidence(*pkg, now), integerThresholdEvidence("thresholds (day(s))", tiers, func(policy config.PolicyTierConfig) int {
+				return policy.MinimumDaysSinceLatestRelease
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if policy.MinimumDaysSinceLatestRelease <= 0 {
+				return nil
+			}
+			return releaseage.Check(*pkg, policy.MinimumDaysSinceLatestRelease, now)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "dormant_release",
+		applicable: true,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.DormantReleaseThresholdDays > 0 }),
+		indeterminate: func(policy config.PolicyTierConfig) string {
+			if policy.DormantReleaseThresholdDays <= 0 {
+				return ""
+			}
+			return packageHistoryIndeterminateReason(*pkg)
+		},
+		evidence: func() []string {
+			return append(dormantReleaseEvidence(*pkg), integerThresholdEvidence("thresholds (day(s))", tiers, func(policy config.PolicyTierConfig) int {
+				return policy.DormantReleaseThresholdDays
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if policy.DormantReleaseThresholdDays <= 0 {
+				return nil
+			}
+			return dormant.Check(*pkg, policy.DormantReleaseThresholdDays)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "protected_package",
+		applicable: true,
+		enabled:    anyTier(tiers, hasProtectedPackagePolicy),
+		evidence: func() []string {
+			return protectedNameEvidence(*pkg, "configured protected packages", tiers, func(policy config.PolicyTierConfig) map[string][]string {
+				return policy.ProtectedPackages
+			})
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !hasProtectedPackagePolicy(policy) {
+				return nil
+			}
+			return namesquat.CheckProtectedPackages(*pkg, policy)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "protected_token",
+		applicable: true,
+		enabled:    anyTier(tiers, hasProtectedTokenPolicy),
+		evidence: func() []string {
+			return protectedNameEvidence(*pkg, "configured protected tokens", tiers, func(policy config.PolicyTierConfig) map[string][]string {
+				return policy.ProtectedTokens
+			})
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !hasProtectedTokenPolicy(policy) {
+				return nil
+			}
+			return namesquat.CheckProtectedTokens(*pkg, policy)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "first_release",
+		applicable: true,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.AlertOnFirstRelease }),
+		evidence: func() []string {
+			return append(firstReleaseEvidence(*pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.AlertOnFirstRelease
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !policy.AlertOnFirstRelease {
+				return nil
+			}
+			return firstrelease.Check(*pkg)
+		},
+	})
+
+	npmApplicable := isNPM(*pkg)
+	npmHistoryVersions := maxTierInteger(tiers, func(policy config.PolicyTierConfig) int { return policy.InstallLifecycleHistoryVersions })
+	evaluate(debugPolicyCheck{
+		id:         "npm_lifecycle_scripts",
+		applicable: npmApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.InstallLifecycleScripts }),
+		evidence: func() []string {
+			return append(installlifecycle.DeclaredScriptsEvidence(*pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.InstallLifecycleScripts
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !policy.InstallLifecycleScripts {
+				return nil
+			}
+			return installlifecycle.CheckDeclaredScripts(*pkg)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "npm_suspicious_install_commands",
+		applicable: npmApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.SuspiciousInstallScriptCommands }),
+		evidence: func() []string {
+			return append(installlifecycle.SuspiciousCommandsEvidence(*pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.SuspiciousInstallScriptCommands
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !policy.SuspiciousInstallScriptCommands {
+				return nil
+			}
+			return installlifecycle.CheckSuspiciousCommands(*pkg)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "npm_lifecycle_history",
+		applicable: npmApplicable,
+		enabled:    npmHistoryVersions > 0,
+		indeterminate: func(policy config.PolicyTierConfig) string {
+			if policy.InstallLifecycleHistoryVersions <= 0 {
+				return ""
+			}
+			return pkg.NPMHistory.IndeterminateReason
+		},
+		evidence: func() []string {
+			return append(installlifecycle.HistoryEvidence(*pkg, npmHistoryVersions), integerThresholdEvidence("history limits", tiers, func(policy config.PolicyTierConfig) int {
+				return policy.InstallLifecycleHistoryVersions
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if policy.InstallLifecycleHistoryVersions <= 0 {
+				return nil
+			}
+			return installlifecycle.CheckHistoryChanges(*pkg, policy.InstallLifecycleHistoryVersions)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "npm_lifecycle_added_after_dormancy",
+		applicable: npmApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.InstallScriptAddedAfterDormancy }),
+		indeterminate: func(policy config.PolicyTierConfig) string {
+			if !policy.InstallScriptAddedAfterDormancy {
+				return ""
+			}
+			return pkg.NPMHistory.IndeterminateReason
+		},
+		evidence: func() []string {
+			return append(installlifecycle.DormantAddedEvidence(*pkg, npmHistoryVersions, maxTierInteger(tiers, func(policy config.PolicyTierConfig) int {
+				return policy.DormantReleaseThresholdDays
+			})), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.InstallScriptAddedAfterDormancy
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !policy.InstallScriptAddedAfterDormancy {
+				return nil
+			}
+			return installlifecycle.CheckDormantAdded(*pkg, policy.InstallLifecycleHistoryVersions, policy.DormantReleaseThresholdDays)
+		},
+	})
+
+	pypiApplicable := isPyPI(*pkg)
+	pypiHistoryVersions := maxTierInteger(tiers, func(policy config.PolicyTierConfig) int { return policy.PyPIArtifactHistoryVersions })
+	appendInformationalTrace(pkg, options.Debug, "pypi_artifact_history", pypiApplicable, pypiHistoryVersions > 0, func() []string {
+		return pypiartifacts.ArtifactHistoryEvidence(*pkg, pypiHistoryVersions)
+	})
+	evaluate(debugPolicyCheck{
+		id:         "pypi_artifact_shape",
+		applicable: pypiApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.PyPIArtifactShapeChange }),
+		indeterminate: func(policy config.PolicyTierConfig) string {
+			return pypiHistoryIndeterminateReason(*pkg, policy.PyPIArtifactShapeChange)
+		},
+		evidence: func() []string {
+			return append(pypiartifacts.ArtifactShapeEvidence(*pkg, pypiHistoryVersions), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.PyPIArtifactShapeChange
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !policy.PyPIArtifactShapeChange {
+				return nil
+			}
+			return pypiartifacts.CheckArtifactShapeChange(*pkg, policy.PyPIArtifactHistoryVersions)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "pypi_file_size_jump",
+		applicable: pypiApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.PyPIFileSizeJumpPercent > 0 }),
+		indeterminate: func(policy config.PolicyTierConfig) string {
+			return pypiHistoryIndeterminateReason(*pkg, policy.PyPIFileSizeJumpPercent > 0)
+		},
+		evidence: func() []string {
+			return append(pypiartifacts.FileSizeEvidence(*pkg, pypiHistoryVersions), integerThresholdEvidence("thresholds (percent)", tiers, func(policy config.PolicyTierConfig) int {
+				return policy.PyPIFileSizeJumpPercent
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if policy.PyPIFileSizeJumpPercent <= 0 {
+				return nil
+			}
+			return pypiartifacts.CheckFileSizeJump(*pkg, policy.PyPIArtifactHistoryVersions, policy.PyPIFileSizeJumpPercent)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "pypi_dependency_change",
+		applicable: pypiApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.PyPIDependencyChange }),
+		indeterminate: func(policy config.PolicyTierConfig) string {
+			return pypiHistoryIndeterminateReason(*pkg, policy.PyPIDependencyChange)
+		},
+		evidence: func() []string {
+			evidence := append(pypiartifacts.DependencyEvidence(*pkg, pypiHistoryVersions, anyTier(tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.PyPIIncludeOptionalDependencies
+			})), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.PyPIDependencyChange
+			}))
+			return append(evidence, booleanThresholdEvidence("optional dependency comparison tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.PyPIIncludeOptionalDependencies
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !policy.PyPIDependencyChange {
+				return nil
+			}
+			return pypiartifacts.CheckDependencyChange(*pkg, policy.PyPIArtifactHistoryVersions, policy.PyPIIncludeOptionalDependencies)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "pypi_provenance",
+		applicable: pypiApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.PyPIProvenanceRequired }),
+		evidence: func() []string {
+			return append(pypiartifacts.ProvenanceEvidence(*pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.PyPIProvenanceRequired
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !policy.PyPIProvenanceRequired {
+				return nil
+			}
+			return pypiartifacts.CheckProvenanceRequired(*pkg, policy.PyPIProvenanceScope)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "pypi_release_file_count",
+		applicable: pypiApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.PyPIReleaseFileCountChange }),
+		indeterminate: func(policy config.PolicyTierConfig) string {
+			return pypiHistoryIndeterminateReason(*pkg, policy.PyPIReleaseFileCountChange)
+		},
+		evidence: func() []string {
+			return append(pypiartifacts.ReleaseFileCountEvidence(*pkg, pypiHistoryVersions), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.PyPIReleaseFileCountChange
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !policy.PyPIReleaseFileCountChange {
+				return nil
+			}
+			return pypiartifacts.CheckReleaseFileCountChange(*pkg, policy.PyPIArtifactHistoryVersions)
+		},
+	})
+
+	if enabledPolicy {
+		pkg.Decision = report.DecisionAllow
+	}
+}
+
+type debugPolicyCheck struct {
+	id            string
+	applicable    bool
+	enabled       bool
+	indeterminate func(config.PolicyTierConfig) string
+	evidence      func() []string
+	check         func(config.PolicyTierConfig) []report.Finding
+}
+
+func evaluatePolicyCheck(tiers []policyTier, debug bool, check debugPolicyCheck) ([]report.Finding, report.DebugTraceEntry) {
+	trace := report.DebugTraceEntry{CheckID: check.id}
+	if !check.applicable {
+		trace.Status = report.DebugTraceNotApplicable
+		return nil, trace
+	}
+	if !check.enabled {
+		trace.Status = report.DebugTraceDisabled
+		if debug {
+			trace.Evidence = check.evidence()
+		}
+		return nil, trace
+	}
+
+	findings, severity, indeterminate := firstMatchingTierCheckResult(tiers, check)
+	if !debug {
+		return findings, trace
+	}
+	trace.Evidence = check.evidence()
+	if indeterminate {
+		trace.Status = report.DebugTraceIndeterminate
+		trace.Severity = severity
+		for _, finding := range findings {
+			trace.Evidence = append(trace.Evidence, "finding: "+finding.Message)
+		}
+		return findings, trace
+	}
+	if len(findings) == 0 {
+		trace.Status = report.DebugTraceNoMatch
+		return findings, trace
+	}
+	trace.Status = report.DebugTraceMatch
+	trace.Severity = severity
+	for _, finding := range findings {
+		trace.Evidence = append(trace.Evidence, "finding: "+finding.Message)
+	}
+	return findings, trace
+}
+
+func firstMatchingTierCheckResult(tiers []policyTier, check debugPolicyCheck) ([]report.Finding, string, bool) {
+	for _, tier := range tiers {
+		if check.indeterminate != nil {
+			if reason := check.indeterminate(tier.policy); reason != "" {
+				findings := []report.Finding{{Message: "policy evaluation is indeterminate: " + reason}}
+				return withSeverity(findings, tier.level), tier.level, true
+			}
+		}
+		findings := check.check(tier.policy)
+		if len(findings) > 0 {
+			return withSeverity(findings, tier.level), tier.level, false
+		}
+	}
+	return nil, "", false
+}
+
+func appendInformationalTrace(pkg *report.PackageReport, debug bool, id string, applicable bool, enabled bool, evidence func() []string) {
+	if !debug {
+		return
+	}
+	trace := report.DebugTraceEntry{CheckID: id}
+	switch {
+	case !applicable:
+		trace.Status = report.DebugTraceNotApplicable
+	case !enabled:
+		trace.Status = report.DebugTraceDisabled
+		trace.Evidence = evidence()
+	default:
+		trace.Status = report.DebugTraceNoMatch
+		trace.Evidence = evidence()
+	}
+	pkg.DebugTrace = append(pkg.DebugTrace, trace)
 }
 
 func strongestFirstPolicyTiers(policy config.PolicyConfig) []policyTier {
@@ -162,14 +459,27 @@ func hasProtectedNamePolicy(policy config.PolicyTierConfig) bool {
 	return len(policy.ProtectedPackages) > 0 || len(policy.ProtectedTokens) > 0
 }
 
+func hasProtectedPackagePolicy(policy config.PolicyTierConfig) bool {
+	return len(policy.ProtectedPackages) > 0
+}
+
+func hasProtectedTokenPolicy(policy config.PolicyTierConfig) bool {
+	return len(policy.ProtectedTokens) > 0
+}
+
 func firstMatchingTierFinding(tiers []policyTier, check func(config.PolicyTierConfig) []report.Finding) []report.Finding {
+	findings, _ := firstMatchingTierResult(tiers, check)
+	return findings
+}
+
+func firstMatchingTierResult(tiers []policyTier, check func(config.PolicyTierConfig) []report.Finding) ([]report.Finding, string) {
 	for _, tier := range tiers {
 		findings := check(tier.policy)
 		if len(findings) > 0 {
-			return withSeverity(findings, tier.level)
+			return withSeverity(findings, tier.level), tier.level
 		}
 	}
-	return nil
+	return nil, ""
 }
 
 func withSeverity(findings []report.Finding, severity string) []report.Finding {
@@ -206,7 +516,7 @@ func policyTierSummary(policy config.PolicyTierConfig) string {
 		)
 	}
 	if hasProtectedNamePolicy(policy) {
-		summaries = append(summaries, "protected package and token checks enabled")
+		summaries = append(summaries, "protected package or token checks enabled")
 	}
 	if policy.AlertOnFirstRelease {
 		summaries = append(summaries, "first-release package checks enabled")
@@ -238,19 +548,40 @@ func policyTierSummary(policy config.PolicyTierConfig) string {
 	if policy.PyPIFileSizeJumpPercent > 0 {
 		summaries = append(
 			summaries,
-			fmt.Sprintf("PyPI file size jump threshold is %d%% of historical median", policy.PyPIFileSizeJumpPercent),
+			fmt.Sprintf("PyPI file size jump threshold is a %d%% increase over historical median", policy.PyPIFileSizeJumpPercent),
 		)
 	}
 	if policy.PyPIDependencyChange {
-		summaries = append(summaries, "PyPI dependency change checks enabled")
+		if policy.PyPIIncludeOptionalDependencies {
+			summaries = append(summaries, "PyPI required and optional dependency change checks enabled")
+		} else {
+			summaries = append(summaries, "PyPI required dependency change checks enabled")
+		}
 	}
 	if policy.PyPIProvenanceRequired {
-		summaries = append(summaries, "PyPI provenance availability checks enabled")
+		summaries = append(summaries, fmt.Sprintf("PyPI provenance availability checks enabled for %s", policy.PyPIProvenanceScope))
 	}
 	if policy.PyPIReleaseFileCountChange {
 		summaries = append(summaries, "PyPI release file count change checks enabled")
 	}
 	return joinPolicySummaries(summaries)
+}
+
+func packageHistoryIndeterminateReason(pkg report.PackageReport) string {
+	if isNPM(pkg) {
+		return pkg.NPMHistory.IndeterminateReason
+	}
+	if isPyPI(pkg) {
+		return pkg.PyPIHistory.IndeterminateReason
+	}
+	return ""
+}
+
+func pypiHistoryIndeterminateReason(pkg report.PackageReport, enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	return pkg.PyPIHistory.IndeterminateReason
 }
 
 func joinPolicySummaries(values []string) string {

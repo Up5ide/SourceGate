@@ -4,9 +4,9 @@ SourceGate is a security-first Go CLI that sits in front of package managers and
 
 The long-term goal is to become a local, policy-driven enforcement layer for software supply-chain risk. SourceGate should help developers and CI systems identify risky packages, explain the reasons clearly, and eventually allow, warn, or block installation based on deterministic policy.
 
-## Version 0.5 Scope
+## Version 0.5.2 Scope
 
-Version 0.5 is intentionally small.
+Version 0.5.2 keeps the metadata-only inspection boundary and improves live-registry reliability.
 
 SourceGate does not install packages, download package archives, or invoke the real package manager. It accepts familiar install-shaped commands and fetches public registry metadata for the requested package.
 
@@ -15,6 +15,9 @@ Supported command shape:
 ```bash
 sourcegate npm install <package>
 sourcegate pip install <package>
+sourcegate --debug npm install <package>
+sourcegate --debug pip install <package>
+sourcegate --debug --python python --target-platform linux_x86_64 --python-version 3.12 --implementation cp --abi cp312 pip install <package>
 ```
 
 Expected behavior:
@@ -23,6 +26,8 @@ Expected behavior:
 2. Query the relevant public registry.
 3. Display available package metadata and tiered policy findings.
 4. Exit without installing the package.
+
+Global prefix options can be passed before the package manager. The optional `--debug` flag appends a concise evaluation trace to standard output. PyPI inspection also accepts `--python`, `--target-platform`, `--python-version`, `--implementation`, and repeatable `--abi` target overrides. Debug mode is observational only: it does not enable disabled checks, change findings, or make additional registry requests.
 
 ## Mission
 
@@ -56,8 +61,11 @@ Supported behavior:
 - Query the relevant public registry.
 - Read local policy from `sourcegate.config.json`.
 - Emit tiered policy findings for release timing, package history, package names, npm lifecycle metadata, and PyPI artifact/provenance metadata.
+- Append a human-readable policy evaluation trace when `--debug` is provided before the package manager.
+- Check PyPI provenance for install-target artifacts by default when the configured policy requires provenance.
+- Print a warning when Python compatibility-tag inspection fails and SourceGate uses host OS/architecture fallback filtering.
 - Exit without installing the package.
-- Avoid invoking `npm`, `pip`, or any package lifecycle hooks.
+- Avoid invoking `npm`, package installation, or any package lifecycle hooks. PyPI install-target provenance inspection may run local `<python> -m pip debug --verbose` to discover compatibility tags.
 
 The current version does not download archives, analyze package contents, or invoke package-manager install behavior.
 
@@ -66,6 +74,7 @@ The current version does not download archives, analyze package contents, or inv
 - [Configuration](docs/configuration.md)
 - [Design](docs/design.md)
 - [Attack Vectors](docs/attack-vectors.md)
+- [Live Registry Smoke Test](docs/live-registry-smoke-test.md)
 
 ## Planned Next
 

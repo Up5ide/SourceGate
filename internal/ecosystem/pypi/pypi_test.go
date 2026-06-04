@@ -2,16 +2,25 @@ package pypi
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/sourcegate/sourcegate/internal/report"
 )
 
 func TestFetchMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/requests/json" {
 			t.Fatalf("path = %q, want /requests/json", r.URL.Path)
+		}
+		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.5.2" {
+			t.Fatalf("user agent = %q, want sourcegate/0.5.2", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
@@ -62,8 +71,169 @@ func TestFetchMetadata(t *testing.T) {
 	}
 }
 
+func TestSelectHistoryExcludesLaterAndPrereleaseVersionsForStableLatest(t *testing.T) {
+	entries, diagnostics := selectHistory(map[string][]release{
+		"1.0.0":   {{UploadTimeISO: "2026-01-01T00:00:00Z"}},
+		"1.1.0b1": {{UploadTimeISO: "2026-02-01T00:00:00Z"}},
+		"1.1.0":   {{UploadTimeISO: "2026-03-01T00:00:00Z"}},
+		"1.2.0b1": {{UploadTimeISO: "2026-04-01T00:00:00Z"}},
+	}, "1.1.0", 1)
+
+	if len(entries) != 1 || entries[0].version != "1.0.0" {
+		t.Fatalf("entries = %+v, want earlier stable release only", entries)
+	}
+	if diagnostics.SkippedLaterVersions != 1 || diagnostics.SkippedPrereleaseVersions != 1 {
+		t.Fatalf("diagnostics = %+v, want one later and one prerelease skip", diagnostics)
+	}
+}
+
+func TestSelectHistoryDoesNotPoisonFilledRecentWindowWithOldMissingTimestamp(t *testing.T) {
+	entries, diagnostics := selectHistory(map[string][]release{
+		"1.0.0": {},
+		"2.0.0": {{UploadTimeISO: "2026-01-01T00:00:00Z"}},
+		"2.1.0": {{UploadTimeISO: "2026-02-01T00:00:00Z"}},
+		"2.2.0": {{UploadTimeISO: "2026-03-01T00:00:00Z"}},
+	}, "2.2.0", 2)
+
+	if len(entries) != 2 {
+		t.Fatalf("entries = %+v, want filled recent window", entries)
+	}
+	if diagnostics.IndeterminateReason != "" {
+		t.Fatalf("diagnostics = %+v, want old missing timestamp reported but not indeterminate", diagnostics)
+	}
+	if len(diagnostics.SkippedMalformedTimes) != 1 || diagnostics.SkippedMalformedTimes[0] != "1.0.0" {
+		t.Fatalf("diagnostics = %+v, want skipped old timestamp evidence", diagnostics)
+	}
+}
+
+func TestNormalizeRequirementsSeparatesOptionalExtras(t *testing.T) {
+	required, optional := normalizeRequirements([]string{
+		"urllib3>=1.0",
+		"charset-normalizer ; python_version >= '3'",
+		"socks ; extra == 'socks'",
+	})
+
+	if strings.Join(required, ",") != "charset-normalizer,urllib3" {
+		t.Fatalf("required = %v, want normalized required names", required)
+	}
+	if strings.Join(optional, ",") != "socks" {
+		t.Fatalf("optional = %v, want optional extra name", optional)
+	}
+}
+
+func TestPrepareProvenanceFiltersInstallTargetFiles(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	oldIntegrityBase := IntegrityBaseURL
+	IntegrityBaseURL = server.URL
+	defer func() { IntegrityBaseURL = oldIntegrityBase }()
+
+	files := provenanceFixtureFiles()
+	summary, warning := prepareProvenance(context.Background(), server.Client(), "pkg", "1.0.0", files, Options{
+		ProvenanceScopes: []string{ProvenanceScopeInstallTarget},
+		Target:           TargetOptions{PythonExecutable: "py", TargetPlatform: "win_amd64"},
+		RunCommand: func(ctx context.Context, executable string, args ...string) ([]byte, error) {
+			if executable != "py" || !strings.Contains(strings.Join(args, " "), "--platform win_amd64") {
+				t.Fatalf("command = %s %v, want configured Python and platform", executable, args)
+			}
+			return []byte("Compatible tags: 2\n  cp311-cp311-win_amd64\n  py3-none-any\n"), nil
+		},
+	})
+
+	if warning != "" || summary.CheckedCompatibleFiles != 3 || summary.SkippedNonTargetFiles != 1 {
+		t.Fatalf("summary = %+v warning = %q, want three checked and one skipped", summary, warning)
+	}
+	if requests.Load() != 3 {
+		t.Fatalf("requests = %d, want 3 selected provenance requests", requests.Load())
+	}
+	if files[1].ProvenanceChecked {
+		t.Fatalf("linux wheel = %+v, want skipped non-target file", files[1])
+	}
+}
+
+func TestPrepareProvenanceFallsBackToExplicitPlatform(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	oldIntegrityBase := IntegrityBaseURL
+	IntegrityBaseURL = server.URL
+	defer func() { IntegrityBaseURL = oldIntegrityBase }()
+
+	files := provenanceFixtureFiles()
+	summary, warning := prepareProvenance(context.Background(), server.Client(), "pkg", "1.0.0", files, Options{
+		ProvenanceScopes: []string{ProvenanceScopeInstallTarget},
+		Target:           TargetOptions{PythonExecutable: "missing-python", TargetPlatform: "win_amd64"},
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+			return nil, errors.New("not found")
+		},
+	})
+
+	if !summary.UsedFallback || !strings.Contains(warning, "using fallback platform") {
+		t.Fatalf("summary = %+v warning = %q, want visible fallback", summary, warning)
+	}
+	if summary.CheckedCompatibleFiles != 3 || summary.SkippedNonTargetFiles != 1 {
+		t.Fatalf("summary = %+v, want explicit-platform filtering", summary)
+	}
+}
+
+func TestAnnotateProvenanceLimitsConcurrency(t *testing.T) {
+	var active atomic.Int32
+	var maximum atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := active.Add(1)
+		for {
+			previous := maximum.Load()
+			if current <= previous || maximum.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		active.Add(-1)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	oldIntegrityBase := IntegrityBaseURL
+	IntegrityBaseURL = server.URL
+	defer func() { IntegrityBaseURL = oldIntegrityBase }()
+
+	files := make([]report.PyPIReleaseFile, 8)
+	selected := make([]int, len(files))
+	for i := range files {
+		files[i].Filename = fmt.Sprintf("pkg-1.0.0-%d.tar.gz", i)
+		selected[i] = i
+	}
+	annotateProvenance(context.Background(), server.Client(), "pkg", "1.0.0", files, selected)
+
+	if maximum.Load() > 4 {
+		t.Fatalf("maximum concurrency = %d, want at most 4", maximum.Load())
+	}
+	if maximum.Load() < 2 {
+		t.Fatalf("maximum concurrency = %d, want concurrent requests", maximum.Load())
+	}
+}
+
+func provenanceFixtureFiles() []report.PyPIReleaseFile {
+	return []report.PyPIReleaseFile{
+		{Filename: "pkg-1.0.0-cp311-cp311-win_amd64.whl", PackageType: "bdist_wheel"},
+		{Filename: "pkg-1.0.0-cp311-cp311-linux_x86_64.whl", PackageType: "bdist_wheel"},
+		{Filename: "pkg-1.0.0-py3-none-any.whl", PackageType: "bdist_wheel"},
+		{Filename: "pkg-1.0.0.tar.gz", PackageType: "sdist"},
+	}
+}
+
 func TestFetchMetadataWithArtifactOptions(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.5.2" {
+			t.Fatalf("user agent = %q, want sourcegate/0.5.2", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/requests/json":
@@ -141,8 +311,8 @@ func TestFetchMetadataWithArtifactOptions(t *testing.T) {
 	}()
 
 	report, err := NewWithOptions(server.Client(), Options{
-		HistoryVersions: 1,
-		CheckProvenance: true,
+		HistoryVersions:  1,
+		ProvenanceScopes: []string{ProvenanceScopeAllArtifacts},
 	}).FetchMetadata(context.Background(), "requests")
 	if err != nil {
 		t.Fatalf("FetchMetadata returned error: %v", err)

@@ -34,6 +34,12 @@ func RenderHuman(w io.Writer, pkg report.PackageReport) {
 	if pkg.PolicySummary != "" {
 		fmt.Fprintf(w, "Policy: %s\n", pkg.PolicySummary)
 	}
+	if len(pkg.Warnings) > 0 {
+		fmt.Fprintln(w, "Warnings:")
+		for _, warning := range pkg.Warnings {
+			fmt.Fprintf(w, "  - %s\n", warning)
+		}
+	}
 	if len(pkg.Findings) > 0 {
 		fmt.Fprintln(w, "Findings:")
 		for _, finding := range pkg.Findings {
@@ -44,6 +50,22 @@ func RenderHuman(w io.Writer, pkg report.PackageReport) {
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Decision: %s\n", decisionOrInspectOnly(pkg.Decision))
 	fmt.Fprintln(w, "Install executed: no")
+
+	if len(pkg.DebugTrace) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Debug Evaluation Trace:")
+		for _, entry := range pkg.DebugTrace {
+			if entry.Severity == "" {
+				fmt.Fprintf(w, "  [%s] %s\n", entry.CheckID, entry.Status)
+			} else {
+				fmt.Fprintf(w, "  [%s] %s severity=%s\n", entry.CheckID, entry.Status, entry.Severity)
+			}
+			for _, evidence := range entry.Evidence {
+				fmt.Fprintf(w, "    %s\n", evidence)
+			}
+			fmt.Fprintln(w)
+		}
+	}
 }
 
 func valueOrUnknown(value string) string {

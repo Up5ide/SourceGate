@@ -23,6 +23,8 @@ func TestLoad(t *testing.T) {
 				"pypi_file_size_jump_percent": 0,
 				"pypi_dependency_change": false,
 				"pypi_provenance_required": false,
+				"pypi_provenance_scope": false,
+				"pypi_include_optional_dependencies": false,
 				"pypi_release_file_count_change": false,
 				"protected_packages": {},
 				"protected_tokens": {}
@@ -40,6 +42,8 @@ func TestLoad(t *testing.T) {
 				"pypi_file_size_jump_percent": 300,
 				"pypi_dependency_change": true,
 				"pypi_provenance_required": true,
+				"pypi_provenance_scope": "install-target",
+				"pypi_include_optional_dependencies": true,
 				"pypi_release_file_count_change": true,
 				"protected_packages": {
 					"npm": ["react", "lodash"],
@@ -63,10 +67,18 @@ func TestLoad(t *testing.T) {
 				"pypi_file_size_jump_percent": 0,
 				"pypi_dependency_change": false,
 				"pypi_provenance_required": false,
+				"pypi_provenance_scope": false,
+				"pypi_include_optional_dependencies": false,
 				"pypi_release_file_count_change": false,
 				"protected_packages": {},
 				"protected_tokens": {}
 			}
+		},
+		"pypi_runtime": {
+			"target_platform": "linux_x86_64",
+			"python_version": "3.12",
+			"implementation": "cp",
+			"abis": ["cp312"]
 		}
 	}`), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -113,6 +125,12 @@ func TestLoad(t *testing.T) {
 	if !config.Policy.Alert.PyPIProvenanceRequired {
 		t.Fatalf("alert pypi provenance required = false, want true")
 	}
+	if config.Policy.Alert.PyPIProvenanceScope != "install-target" {
+		t.Fatalf("alert pypi provenance scope = %q, want install-target", config.Policy.Alert.PyPIProvenanceScope)
+	}
+	if !config.Policy.Alert.PyPIIncludeOptionalDependencies {
+		t.Fatalf("alert pypi include optional dependencies = false, want true")
+	}
 	if !config.Policy.Alert.PyPIReleaseFileCountChange {
 		t.Fatalf("alert pypi release file count change = false, want true")
 	}
@@ -127,6 +145,12 @@ func TestLoad(t *testing.T) {
 	}
 	if len(config.Policy.Alert.ProtectedTokens["pypi"]) != 1 {
 		t.Fatalf("pypi protected tokens = %v, want 1 entry", config.Policy.Alert.ProtectedTokens["pypi"])
+	}
+	if config.PyPIRuntime.TargetPlatform != "linux_x86_64" || config.PyPIRuntime.PythonVersion != "3.12" || config.PyPIRuntime.Implementation != "cp" {
+		t.Fatalf("pypi runtime = %+v, want configured target defaults", config.PyPIRuntime)
+	}
+	if len(config.PyPIRuntime.ABIs) != 1 || config.PyPIRuntime.ABIs[0] != "cp312" {
+		t.Fatalf("pypi runtime ABIs = %v, want cp312", config.PyPIRuntime.ABIs)
 	}
 }
 
@@ -211,12 +235,14 @@ func TestLoadRejectsInvalidProtectedNameConfig(t *testing.T) {
 
 func TestLoadRejectsInvalidFlexiblePolicyValueTypes(t *testing.T) {
 	cases := map[string]string{
-		"string integer": `{"policy":{"alert":{"minimum_days_since_latest_release":"3"}}}`,
-		"true integer":   `{"policy":{"alert":{"pypi_file_size_jump_percent":true}}}`,
-		"array map":      `{"policy":{"alert":{"protected_packages":[]}}}`,
-		"string map":     `{"policy":{"alert":{"protected_tokens":"npm"}}}`,
-		"number bool":    `{"policy":{"alert":{"pypi_dependency_change":1}}}`,
-		"unknown field":  `{"policy":{"alert":{"does_not_exist":false}}}`,
+		"string integer":  `{"policy":{"alert":{"minimum_days_since_latest_release":"3"}}}`,
+		"true integer":    `{"policy":{"alert":{"pypi_file_size_jump_percent":true}}}`,
+		"array map":       `{"policy":{"alert":{"protected_packages":[]}}}`,
+		"string map":      `{"policy":{"alert":{"protected_tokens":"npm"}}}`,
+		"number bool":     `{"policy":{"alert":{"pypi_dependency_change":1}}}`,
+		"number optional": `{"policy":{"alert":{"pypi_include_optional_dependencies":1}}}`,
+		"array scope":     `{"policy":{"alert":{"pypi_provenance_scope":[]}}}`,
+		"unknown field":   `{"policy":{"alert":{"does_not_exist":false}}}`,
 	}
 
 	for name, content := range cases {
@@ -226,6 +252,45 @@ func TestLoadRejectsInvalidFlexiblePolicyValueTypes(t *testing.T) {
 				t.Fatalf("write config: %v", err)
 			}
 
+			if _, err := Load(path); err == nil {
+				t.Fatalf("Load returned nil error")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsContradictoryPyPIProvenanceScope(t *testing.T) {
+	cases := map[string]string{
+		"required without scope": `{"policy":{"alert":{"pypi_provenance_required":true,"pypi_provenance_scope":false}}}`,
+		"scope without required": `{"policy":{"alert":{"pypi_provenance_required":false,"pypi_provenance_scope":"install-target"}}}`,
+		"unsupported scope":      `{"policy":{"alert":{"pypi_provenance_required":true,"pypi_provenance_scope":"wheels-only"}}}`,
+	}
+
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sourcegate.config.json")
+			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatalf("Load returned nil error")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidPyPIRuntime(t *testing.T) {
+	cases := map[string]string{
+		"unknown field": `{"pypi_runtime":{"python_executable":"python"}}`,
+		"blank abi":     `{"pypi_runtime":{"abis":[" "]}}`,
+	}
+
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sourcegate.config.json")
+			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
 			if _, err := Load(path); err == nil {
 				t.Fatalf("Load returned nil error")
 			}

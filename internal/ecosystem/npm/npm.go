@@ -8,19 +8,34 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sourcegate/sourcegate/internal/report"
 	"github.com/sourcegate/sourcegate/internal/text"
+	"github.com/sourcegate/sourcegate/internal/version"
+	"github.com/sourcegate/sourcegate/internal/versioning"
 )
 
 var RegistryBaseURL = "https://registry.npmjs.org"
 
 type Adapter struct {
-	client *http.Client
+	client  *http.Client
+	options Options
+}
+
+type Options struct {
+	HistoryVersions int
 }
 
 func New(client *http.Client) *Adapter {
 	return &Adapter{client: client}
+}
+
+func NewWithOptions(client *http.Client, options Options) *Adapter {
+	if options.HistoryVersions < 0 {
+		options.HistoryVersions = 0
+	}
+	return &Adapter{client: client, options: options}
 }
 
 type registryResponse struct {
@@ -69,7 +84,7 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 		return report.PackageReport{}, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "sourcegate/0.5")
+	req.Header.Set("User-Agent", version.UserAgent())
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -95,6 +110,7 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 	if license == "" && latest != "" {
 		license = latestVersion.License
 	}
+	historyEntries, historyDiagnostics := selectHistory(data.Time, latest, max(1, a.options.HistoryVersions))
 
 	return report.PackageReport{
 		Ecosystem:           "npm",
@@ -102,17 +118,18 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 		Name:                text.FirstNonEmpty(data.Name, packageName),
 		LatestVersion:       latest,
 		LatestPublishedAt:   data.Time[latest],
-		PreviousPublishedAt: previousPublishedAt(data.Time, latest),
+		PreviousPublishedAt: previousPublishedAt(historyEntries),
 		Description:         data.Description,
 		License:             license,
 		Author:              formatPerson(data.Author),
 		Maintainers:         formatPeople(data.Maintainers),
 		LifecycleScripts:    compactStringMap(latestVersion.Scripts),
-		LifecycleHistory:    lifecycleHistory(data.Time, data.Versions, latest),
+		LifecycleHistory:    lifecycleHistory(historyEntries, data.Versions),
 		ProjectURLs:         projectURLs(data),
 		CreatedAt:           data.Time["created"],
 		ModifiedAt:          data.Time["modified"],
 		VersionCount:        len(data.Versions),
+		NPMHistory:          historyDiagnostics,
 	}, nil
 }
 
@@ -121,21 +138,7 @@ type lifecycleHistoryEntry struct {
 	publishedAt string
 }
 
-func lifecycleHistory(times map[string]string, versions map[string]versionDoc, latestVersion string) []report.VersionLifecycleScripts {
-	var entries []lifecycleHistoryEntry
-	for version, publishedAt := range times {
-		if version == "created" || version == "modified" || version == latestVersion || publishedAt == "" {
-			continue
-		}
-		entries = append(entries, lifecycleHistoryEntry{version: version, publishedAt: publishedAt})
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].publishedAt == entries[j].publishedAt {
-			return entries[i].version > entries[j].version
-		}
-		return entries[i].publishedAt > entries[j].publishedAt
-	})
-
+func lifecycleHistory(entries []lifecycleHistoryEntry, versions map[string]versionDoc) []report.VersionLifecycleScripts {
 	history := make([]report.VersionLifecycleScripts, 0, len(entries))
 	for _, entry := range entries {
 		version, ok := versions[entry.version]
@@ -147,6 +150,79 @@ func lifecycleHistory(times map[string]string, versions map[string]versionDoc, l
 		})
 	}
 	return history
+}
+
+func selectHistory(times map[string]string, latestVersion string, reliabilityLimit int) ([]lifecycleHistoryEntry, report.HistoryDiagnostics) {
+	diagnostics := report.HistoryDiagnostics{}
+	latestPublishedAt, err := parseRegistryTime(times[latestVersion])
+	if err != nil {
+		diagnostics.IndeterminateReason = "selected npm release publish time is unavailable or invalid"
+		return nil, diagnostics
+	}
+	latestPrerelease, err := versioning.NPMPrerelease(latestVersion)
+	if err != nil {
+		diagnostics.IndeterminateReason = err.Error()
+		return nil, diagnostics
+	}
+
+	var entries []lifecycleHistoryEntry
+	var malformedVersions []lifecycleHistoryEntry
+	for version, publishedAt := range times {
+		if version == "created" || version == "modified" || version == latestVersion {
+			continue
+		}
+		published, err := parseRegistryTime(publishedAt)
+		if err != nil {
+			diagnostics.SkippedMalformedTimes = append(diagnostics.SkippedMalformedTimes, version)
+			continue
+		}
+		if !published.Before(latestPublishedAt) {
+			diagnostics.SkippedLaterVersions++
+			continue
+		}
+		prerelease, err := versioning.NPMPrerelease(version)
+		if err != nil {
+			diagnostics.SkippedMalformedVersions = append(diagnostics.SkippedMalformedVersions, version)
+			malformedVersions = append(malformedVersions, lifecycleHistoryEntry{version: version, publishedAt: publishedAt})
+			continue
+		}
+		if !latestPrerelease && prerelease {
+			diagnostics.SkippedPrereleaseVersions++
+			continue
+		}
+		entries = append(entries, lifecycleHistoryEntry{version: version, publishedAt: publishedAt})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].publishedAt == entries[j].publishedAt {
+			return entries[i].version > entries[j].version
+		}
+		return entries[i].publishedAt > entries[j].publishedAt
+	})
+	for _, entry := range entries {
+		diagnostics.SelectedVersions = append(diagnostics.SelectedVersions, entry.version)
+	}
+	sort.Strings(diagnostics.SkippedMalformedTimes)
+	sort.Strings(diagnostics.SkippedMalformedVersions)
+	if (len(entries) < reliabilityLimit && len(diagnostics.SkippedMalformedTimes) > 0) || malformedEntryCanAffectWindow(malformedVersions, entries, reliabilityLimit) {
+		diagnostics.IndeterminateReason = "npm release history contains malformed version or publish-time metadata"
+	}
+	return entries, diagnostics
+}
+
+func malformedEntryCanAffectWindow(malformed []lifecycleHistoryEntry, valid []lifecycleHistoryEntry, reliabilityLimit int) bool {
+	if len(malformed) == 0 {
+		return false
+	}
+	if len(valid) < reliabilityLimit {
+		return true
+	}
+	cutoff := valid[reliabilityLimit-1].publishedAt
+	for _, entry := range malformed {
+		if entry.publishedAt >= cutoff {
+			return true
+		}
+	}
+	return false
 }
 
 func compactStringMap(values map[string]string) map[string]string {
@@ -167,19 +243,21 @@ func compactStringMap(values map[string]string) map[string]string {
 	return compacted
 }
 
-func previousPublishedAt(times map[string]string, latestVersion string) string {
-	var releases []string
-	for version, publishedAt := range times {
-		if version == "created" || version == "modified" || version == latestVersion || publishedAt == "" {
-			continue
-		}
-		releases = append(releases, publishedAt)
-	}
-	if len(releases) == 0 {
+func previousPublishedAt(entries []lifecycleHistoryEntry) string {
+	if len(entries) == 0 {
 		return ""
 	}
-	sort.Strings(releases)
-	return releases[len(releases)-1]
+	return entries[0].publishedAt
+}
+
+func parseRegistryTime(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, fmt.Errorf("empty time")
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed, nil
+	}
+	return time.Parse(time.RFC3339, value)
 }
 
 func formatPeople(people []person) []string {

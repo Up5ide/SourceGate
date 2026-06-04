@@ -1,6 +1,7 @@
 package pypiartifacts
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -49,8 +50,8 @@ func TestCheckFileSizeJumpReportsTotalAndLargestFileIncrease(t *testing.T) {
 		Ecosystem: "PyPI",
 		PyPILatestRelease: report.PyPIReleaseInfo{
 			Files: []report.PyPIReleaseFile{
-				{Filename: "pkg-2.0.0-py3-none-any.whl", Size: 4000},
-				{Filename: "pkg-2.0.0.tar.gz", Size: 2000},
+				{Filename: "pkg-2.0.0-py3-none-any.whl", Size: 5000},
+				{Filename: "pkg-2.0.0.tar.gz", Size: 3000},
 			},
 		},
 		PyPIReleaseHistory: []report.PyPIReleaseInfo{{
@@ -70,6 +71,27 @@ func TestCheckFileSizeJumpReportsTotalAndLargestFileIncrease(t *testing.T) {
 	}
 }
 
+func TestCheckFileSizeJumpUsesIncreaseOverBaseline(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem: "PyPI",
+		PyPILatestRelease: report.PyPIReleaseInfo{
+			Files: []report.PyPIReleaseFile{{Filename: "pkg-2.0.0.tar.gz", Size: 3999}},
+		},
+		PyPIReleaseHistory: []report.PyPIReleaseInfo{{
+			Version: "1.0.0",
+			Files:   []report.PyPIReleaseFile{{Filename: "pkg-1.0.0.tar.gz", Size: 1000}},
+		}},
+	}
+
+	if findings := CheckFileSizeJump(pkg, 5, 300); len(findings) != 0 {
+		t.Fatalf("findings = %+v, want no match below 400%% of baseline", findings)
+	}
+	pkg.PyPILatestRelease.Files[0].Size = 4000
+	if findings := CheckFileSizeJump(pkg, 5, 300); len(findings) == 0 {
+		t.Fatalf("findings = %+v, want match at 300%% increase", findings)
+	}
+}
+
 func TestCheckDependencyChangeReportsAddedAndRemovedDependencies(t *testing.T) {
 	findings := CheckDependencyChange(report.PackageReport{
 		Ecosystem: "PyPI",
@@ -82,7 +104,7 @@ func TestCheckDependencyChangeReportsAddedAndRemovedDependencies(t *testing.T) {
 			DependenciesKnown: true,
 			Dependencies:      []string{"certifi", "requests"},
 		}},
-	}, 5)
+	}, 5, false)
 
 	if !hasMessageContaining(findings, "adds declared dependency name(s): urllib3") {
 		t.Fatalf("findings = %+v, want added dependency finding", findings)
@@ -98,10 +120,50 @@ func TestCheckDependencyChangeReportsUnknownLatestDependencies(t *testing.T) {
 		PyPILatestRelease: report.PyPIReleaseInfo{
 			DependenciesKnown: false,
 		},
-	}, 5)
+	}, 5, false)
 
 	if !hasMessageContaining(findings, "unavailable or dynamic") {
 		t.Fatalf("findings = %+v, want unknown dependency finding", findings)
+	}
+}
+
+func TestCheckDependencyChangeIncludesOptionalDependenciesOnlyWhenEnabled(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem: "PyPI",
+		PyPILatestRelease: report.PyPIReleaseInfo{
+			DependenciesKnown:    true,
+			OptionalDependencies: []string{"socks"},
+		},
+		PyPIReleaseHistory: []report.PyPIReleaseInfo{{
+			Version:           "1.0.0",
+			DependenciesKnown: true,
+		}},
+	}
+
+	if findings := CheckDependencyChange(pkg, 5, false); len(findings) != 0 {
+		t.Fatalf("findings = %+v, want optional changes ignored", findings)
+	}
+	if findings := CheckDependencyChange(pkg, 5, true); !hasMessageContaining(findings, "socks") {
+		t.Fatalf("findings = %+v, want optional dependency change", findings)
+	}
+}
+
+func TestProvenanceEvidenceBoundsMissingFiles(t *testing.T) {
+	var files []report.PyPIReleaseFile
+	for i := range 7 {
+		files = append(files, report.PyPIReleaseFile{
+			Filename:          fmt.Sprintf("pkg-%d.whl", i),
+			ProvenanceChecked: true,
+			ProvenanceScopes:  []string{"install-target"},
+		})
+	}
+	evidence := ProvenanceEvidence(report.PackageReport{
+		PyPILatestRelease: report.PyPIReleaseInfo{Files: files},
+		PyPIProvenance:    report.PyPIProvenanceSummary{RequestedScopes: []string{"install-target"}},
+	})
+
+	if !strings.Contains(strings.Join(evidence, "\n"), "and 2 more") {
+		t.Fatalf("evidence = %v, want bounded filename list", evidence)
 	}
 }
 
@@ -115,16 +177,16 @@ func TestCheckProvenanceRequiredReportsMissingAndUnknownProvenance(t *testing.T)
 				{Filename: "pkg-1.0.0.zip", ProvenanceChecked: false},
 			},
 		},
-	})
+	}, "")
 
-	if !hasMessageContaining(findings, "has no provenance available") {
+	if !hasMessageContaining(findings, "have no provenance available") {
 		t.Fatalf("findings = %+v, want missing provenance finding", findings)
 	}
 	if !hasMessageContaining(findings, "provenance availability is unknown") {
 		t.Fatalf("findings = %+v, want unknown provenance finding", findings)
 	}
-	if !hasMessageContaining(findings, "was not checked") {
-		t.Fatalf("findings = %+v, want not checked provenance finding", findings)
+	if len(findings) != 2 {
+		t.Fatalf("findings = %+v, want one missing and one unknown summary", findings)
 	}
 }
 
@@ -159,10 +221,10 @@ func TestChecksIgnoreNonPyPIReports(t *testing.T) {
 	if len(CheckFileSizeJump(pkg, 5, 300)) != 0 {
 		t.Fatalf("size check returned finding for non-pypi")
 	}
-	if len(CheckDependencyChange(pkg, 5)) != 0 {
+	if len(CheckDependencyChange(pkg, 5, false)) != 0 {
 		t.Fatalf("dependency check returned finding for non-pypi")
 	}
-	if len(CheckProvenanceRequired(pkg)) != 0 {
+	if len(CheckProvenanceRequired(pkg, "")) != 0 {
 		t.Fatalf("provenance check returned finding for non-pypi")
 	}
 	if len(CheckReleaseFileCountChange(pkg, 5)) != 0 {
