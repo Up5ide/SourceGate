@@ -327,8 +327,21 @@ func EvaluateWithOptions(pkg *report.PackageReport, cfg config.Config, now time.
 	})
 
 	if enabledPolicy {
-		pkg.Decision = report.DecisionAllow
+		if hasBlockFinding(pkg.Findings) {
+			pkg.Decision = report.DecisionBlock
+		} else {
+			pkg.Decision = report.DecisionAllow
+		}
 	}
+}
+
+func hasBlockFinding(findings []report.Finding) bool {
+	for _, finding := range findings {
+		if finding.Severity == levelBlock {
+			return true
+		}
+	}
+	return false
 }
 
 type debugPolicyCheck struct {

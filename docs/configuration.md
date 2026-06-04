@@ -6,7 +6,7 @@ Configuration is organized under `policy` with three independent tiers:
 
 - `inform`: low-noise visibility.
 - `alert`: stronger warning-level findings.
-- `block`: reported block-level findings. This is currently a finding level only; SourceGate still does not install or block a real package-manager operation.
+- `block`: block-level findings. These set the report decision to `BLOCK` and return CI exit code `30`; SourceGate still does not install or block a real package-manager operation.
 
 SourceGate evaluates policy tiers from strongest to weakest for each check: `block`, then `alert`, then `inform`. If the same check matches multiple tiers, only the strongest matching tier is reported.
 
@@ -100,8 +100,8 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 
 | Option | Accepted value type | Notes |
 | --- | --- | --- |
-| `minimum_days_since_latest_release` | integer or `false` | Number of days the latest release must age before the finding stops matching. |
-| `dormant_release_threshold_days` | integer or `false` | Number of inactive days that makes a latest release count as dormant. |
+| `minimum_days_since_latest_release` | integer or `false` | Number of days the selected release must age before the finding stops matching. |
+| `dormant_release_threshold_days` | integer or `false` | Number of inactive days that makes a selected release count as dormant. |
 | `alert_on_first_release` | boolean | `true` enables first-release findings; `false` disables them. |
 | `install_lifecycle_scripts` | boolean | `true` enables npm declared lifecycle script findings. |
 | `install_lifecycle_history_versions` | integer or `false` | Number of previous npm versions to compare; `false` disables history comparison. |
@@ -111,7 +111,7 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 | `pypi_artifact_shape_change` | boolean | `true` enables PyPI artifact shape change findings. |
 | `pypi_file_size_jump_percent` | integer or `false` | Percentage increase threshold for size jumps; `false` disables size-jump checks. |
 | `pypi_dependency_change` | boolean | `true` enables PyPI dependency change findings. |
-| `pypi_provenance_required` | boolean | `true` requires latest PyPI release file provenance to be available. |
+| `pypi_provenance_required` | boolean | `true` requires selected PyPI release file provenance to be available. |
 | `pypi_provenance_scope` | string or `false` | Required with `pypi_provenance_required`; accepts `install-target`, `all-artifacts`, or `sdist-only`. |
 | `pypi_include_optional_dependencies` | boolean | Include PyPI optional `extra` dependency names in dependency-change evaluation. |
 | `pypi_release_file_count_change` | boolean | `true` enables PyPI release file count change findings. |
@@ -120,9 +120,9 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 
 ## Release Timing
 
-`minimum_days_since_latest_release` emits a finding when the latest registry release is newer than the configured number of days. This reduces exposure to fast-moving compromise windows where a malicious version may be published and installed before detection.
+`minimum_days_since_latest_release` emits a finding when the selected registry release is newer than the configured number of days. This reduces exposure to fast-moving compromise windows where a malicious version may be published and installed before detection.
 
-`dormant_release_threshold_days` emits a finding when the latest release follows a long period of package inactivity. For example, `180` means SourceGate reports when the previous release was at least 180 days before the latest release.
+`dormant_release_threshold_days` emits a finding when the selected release follows a long period of package inactivity. For example, `180` means SourceGate reports when the previous release was at least 180 days before the selected release.
 
 `alert_on_first_release` emits a finding when the package has only one published version.
 
@@ -130,13 +130,13 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 
 These checks use npm registry metadata only. SourceGate does not download archives and does not execute lifecycle scripts.
 
-`install_lifecycle_scripts` emits npm-only findings when the latest package metadata declares install-relevant lifecycle scripts such as `preinstall`, `install`, `postinstall`, `prepublish`, `prepare`, `preprepare`, or `postprepare`.
+`install_lifecycle_scripts` emits npm-only findings when the selected package metadata declares install-relevant lifecycle scripts such as `preinstall`, `install`, `postinstall`, `prepublish`, `prepare`, `preprepare`, or `postprepare`.
 
 `install_lifecycle_history_versions` controls how many previous npm versions are compared when detecting newly added or changed lifecycle scripts.
 
 `suspicious_install_script_commands` emits npm-only findings when declared lifecycle script commands contain suspicious metadata-visible patterns such as direct URLs, network download commands, shell or command interpreters, native build tooling, package-manager invocation, or permission-changing commands.
 
-`install_script_added_after_dormancy` emits npm-only findings when the latest release adds a lifecycle script after the same tier's configured `dormant_release_threshold_days` period.
+`install_script_added_after_dormancy` emits npm-only findings when the selected release adds a lifecycle script after the same tier's configured `dormant_release_threshold_days` period.
 
 ## PyPI Artifact And Provenance Checks
 
@@ -144,21 +144,21 @@ These checks use PyPI metadata, release-file metadata, version-specific metadata
 
 `pypi_artifact_history_versions` controls how many previous PyPI releases are compared for artifact and dependency metadata checks.
 
-`pypi_artifact_shape_change` emits PyPI-only findings when the latest release changes artifact package types, removes wheels, becomes source-only, adds or removes sdists, or introduces new wheel platform tags.
+`pypi_artifact_shape_change` emits PyPI-only findings when the selected release changes artifact package types, removes wheels, becomes source-only, adds or removes sdists, or introduces new wheel platform tags.
 
-`pypi_file_size_jump_percent` emits PyPI-only findings when the latest release total size or largest file size increases by the configured percentage over the historical median. For example, `300` matches at four times the historical median.
+`pypi_file_size_jump_percent` emits PyPI-only findings when the selected release total size or largest file size increases by the configured percentage over the historical median. For example, `300` matches at four times the historical median.
 
 `pypi_dependency_change` emits PyPI-only findings when release metadata shows added or removed declared dependency names. Required dependencies are compared by default. Set `pypi_include_optional_dependencies` to `true` in the same tier to include optional `extra` dependencies. If dependency metadata is unavailable or dynamic, SourceGate reports that the change cannot be confirmed.
 
-`pypi_provenance_required` emits PyPI-only findings when the PyPI Integrity API reports missing provenance for scoped latest-release files or provenance availability cannot be confirmed. Configure the same tier's `pypi_provenance_scope` as:
+`pypi_provenance_required` emits PyPI-only findings when the PyPI Integrity API reports missing provenance for scoped selected-release files or provenance availability cannot be confirmed. Configure the same tier's `pypi_provenance_scope` as:
 
 - `install-target`: compatible wheels plus source distributions.
-- `all-artifacts`: every latest-release artifact.
+- `all-artifacts`: every selected-release artifact.
 - `sdist-only`: source distributions only.
 
 When `install-target` is enabled, SourceGate runs local `<python> -m pip debug --verbose` to resolve Python compatibility tags. It does not install packages. If tag inspection fails, SourceGate prints a non-policy warning and falls back to explicit platform filtering when configured or SourceGate host OS/architecture filtering otherwise. The fallback includes universal wheels and source distributions.
 
-`pypi_release_file_count_change` emits PyPI-only findings when the latest release file count differs from the historical median.
+`pypi_release_file_count_change` emits PyPI-only findings when the selected release file count differs from the historical median.
 
 ## Name Protection
 

@@ -11,12 +11,13 @@ import (
 )
 
 type InstallRequest struct {
-	Ecosystem   ecosystem.Ecosystem
-	Manager     string
-	Command     string
-	Package     ecosystem.PackageSpec
-	Debug       bool
-	PyPIRuntime PyPIRuntimeOptions
+	Ecosystem    ecosystem.Ecosystem
+	Manager      string
+	Command      string
+	Package      ecosystem.PackageSpec
+	Debug        bool
+	OutputFormat string
+	PyPIRuntime  PyPIRuntimeOptions
 }
 
 type PyPIRuntimeOptions struct {
@@ -28,7 +29,7 @@ type PyPIRuntimeOptions struct {
 }
 
 func ParseInstallCommand(args []string) (InstallRequest, error) {
-	var req InstallRequest
+	req := InstallRequest{OutputFormat: OutputFormatHuman}
 	seen := make(map[string]bool)
 	for len(args) > 0 && strings.HasPrefix(strings.TrimSpace(args[0]), "-") {
 		option := strings.TrimSpace(args[0])
@@ -49,6 +50,16 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 		switch option {
 		case "--debug":
 			req.Debug = true
+		case "--format":
+			value, remaining, err := optionValue(option, args)
+			if err != nil {
+				return InstallRequest{}, err
+			}
+			if value != OutputFormatHuman && value != OutputFormatJSON {
+				return InstallRequest{}, fmt.Errorf("unsupported output format %q: supported formats are human and json", value)
+			}
+			req.OutputFormat = value
+			args = remaining
 		case "--python":
 			value, remaining, err := optionValue(option, args)
 			if err != nil {
@@ -125,6 +136,11 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 	req.Command = command
 	return req, nil
 }
+
+const (
+	OutputFormatHuman = "human"
+	OutputFormatJSON  = "json"
+)
 
 var pypiPackageNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 

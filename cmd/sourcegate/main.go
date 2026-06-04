@@ -17,8 +17,15 @@ func main() {
 	client := &http.Client{Timeout: 10 * time.Second}
 	sourcegate := app.New(client, os.Stdout, os.Stderr)
 
-	if err := sourcegate.Run(ctx, os.Args[1:]); err != nil {
+	result, err := sourcegate.Run(ctx, os.Args[1:])
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		if result.ExitCode == 0 {
+			os.Exit(app.ExitOperationalError)
+		}
+		os.Exit(result.ExitCode)
+	}
+	if result.ExitCode != 0 {
+		os.Exit(result.ExitCode)
 	}
 }

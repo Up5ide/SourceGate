@@ -4,9 +4,9 @@ SourceGate is a security-first Go CLI that sits in front of package managers and
 
 The long-term goal is to become a local, policy-driven enforcement layer for software supply-chain risk. SourceGate should help developers and CI systems identify risky packages, explain the reasons clearly, and eventually allow, warn, or block installation based on deterministic policy.
 
-## Version 0.6.0 Scope
+## Version 0.6.5 Scope
 
-Version 0.6.0 keeps the metadata-only inspection boundary and adds optional exact-version inspection.
+Version 0.6.5 keeps the metadata-only inspection boundary and adds structured JSON output plus CI-friendly exit codes.
 
 SourceGate does not install packages, download package archives, or invoke the real package manager. It accepts familiar install-shaped commands and fetches public registry metadata for the requested package and selected release.
 
@@ -17,6 +17,8 @@ sourcegate npm install <package>
 sourcegate npm install <package>@<version>
 sourcegate pip install <package>
 sourcegate pip install <package>==<version>
+sourcegate --format json npm install <package>
+sourcegate --format json pip install <package>==<version>
 sourcegate --debug npm install <package>
 sourcegate --debug pip install <package>
 sourcegate --debug --python python --target-platform linux_x86_64 --python-version 3.12 --implementation cp --abi cp312 pip install <package>
@@ -28,9 +30,10 @@ Expected behavior:
 2. Query the relevant public registry.
 3. Select the requested exact version or the registry latest release when no version is requested.
 4. Display available package metadata and tiered policy findings for the selected release.
-5. Exit without installing the package.
+5. Exit with a deterministic status code for CI.
+6. Exit without installing the package.
 
-Global prefix options can be passed before the package manager. The optional `--debug` flag appends a concise evaluation trace to standard output. PyPI inspection also accepts `--python`, `--target-platform`, `--python-version`, `--implementation`, and repeatable `--abi` target overrides. Debug mode is observational only: it does not enable disabled checks, change findings, or make additional registry requests.
+Global prefix options can be passed before the package manager. The optional `--debug` flag appends a concise evaluation trace to standard output. Use `--format json` for structured output. PyPI inspection also accepts `--python`, `--target-platform`, `--python-version`, `--implementation`, and repeatable `--abi` target overrides. Debug mode is observational only: it does not enable disabled checks, change findings, or make additional registry requests.
 
 ## Mission
 
@@ -64,6 +67,8 @@ Supported behavior:
 - Query the relevant public registry.
 - Read local policy from `sourcegate.config.json`.
 - Emit tiered policy findings for release timing, package history, package names, npm lifecycle metadata, and PyPI artifact/provenance metadata.
+- Emit either human-readable output or structured JSON.
+- Return CI-friendly exit codes: `0` clean, `10` inform, `20` alert, `30` block, and `2` operational error.
 - Append a human-readable policy evaluation trace when `--debug` is provided before the package manager.
 - Check PyPI provenance for install-target artifacts by default when the configured policy requires provenance.
 - Print a warning when Python compatibility-tag inspection fails and SourceGate uses host OS/architecture fallback filtering.
@@ -84,7 +89,6 @@ The current version does not download archives, analyze package contents, or inv
 Near-term work:
 
 - Normalize npm and PyPI metadata into a shared package report format.
-- Add structured JSON output for automation and CI.
 - Add registry error handling for missing packages, private packages, rate limits, and network failures.
 - Add more metadata findings, such as unusual release timing and missing project information.
 
@@ -96,7 +100,6 @@ Later work:
 - Add upstream repository commit-time analysis where package metadata exposes a source repository.
 - Detect suspicious file paths, embedded binaries, obfuscated code, credential access, environment variable access, network indicators, and remote payload download behavior.
 - Add local policy configuration for allow, warn, and block decisions.
-- Add CI-compatible exit codes.
 
 ## Non-Goals
 

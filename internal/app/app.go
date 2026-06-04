@@ -14,12 +14,26 @@ import (
 	"github.com/sourcegate/sourcegate/internal/ecosystem/npm"
 	"github.com/sourcegate/sourcegate/internal/ecosystem/pypi"
 	"github.com/sourcegate/sourcegate/internal/output"
+	"github.com/sourcegate/sourcegate/internal/report"
+)
+
+const (
+	ExitClean            = 0
+	ExitInformFinding    = 10
+	ExitAlertFinding     = 20
+	ExitBlockFinding     = 30
+	ExitOperationalError = 2
 )
 
 type App struct {
 	client *http.Client
 	out    io.Writer
 	errOut io.Writer
+}
+
+type RunResult struct {
+	Report   report.PackageReport
+	ExitCode int
 }
 
 func New(client *http.Client, out, errOut io.Writer) *App {
@@ -30,33 +44,60 @@ func New(client *http.Client, out, errOut io.Writer) *App {
 	}
 }
 
-func (a *App) Run(ctx context.Context, args []string) error {
+func (a *App) Run(ctx context.Context, args []string) (RunResult, error) {
 	req, err := cli.ParseInstallCommand(args)
 	if err != nil {
 		printUsage(a.errOut)
-		return err
+		return RunResult{ExitCode: ExitOperationalError}, err
 	}
 
 	cfg, err := config.Load(config.DefaultPath)
 	if err != nil {
-		return err
+		return RunResult{ExitCode: ExitOperationalError}, err
 	}
 
 	adapter, err := a.adapterFor(req, cfg)
 	if err != nil {
-		return err
+		return RunResult{ExitCode: ExitOperationalError}, err
 	}
 
 	pkg, err := adapter.FetchMetadata(ctx, req.Package)
 	if err != nil {
-		return err
+		return RunResult{ExitCode: ExitOperationalError}, err
 	}
 
 	checks.EvaluateWithOptions(&pkg, cfg, time.Now(), checks.EvaluationOptions{
 		Debug: req.Debug,
 	})
-	output.RenderHuman(a.out, pkg)
-	return nil
+	exitCode := ExitCodeForReport(pkg)
+	switch req.OutputFormat {
+	case cli.OutputFormatJSON:
+		if err := output.RenderJSON(a.out, pkg); err != nil {
+			return RunResult{Report: pkg, ExitCode: ExitOperationalError}, err
+		}
+	default:
+		output.RenderHuman(a.out, pkg)
+	}
+	return RunResult{Report: pkg, ExitCode: exitCode}, nil
+}
+
+func ExitCodeForReport(pkg report.PackageReport) int {
+	exitCode := ExitClean
+	for _, finding := range pkg.Findings {
+		switch finding.Severity {
+		case "BLOCK":
+			return ExitBlockFinding
+		case "ALERT":
+			if exitCode < ExitAlertFinding {
+				exitCode = ExitAlertFinding
+			}
+		case "INFORM":
+			if exitCode < ExitInformFinding {
+				exitCode = ExitInformFinding
+			}
+		}
+	}
+	return exitCode
 }
 
 func (a *App) adapterFor(req cli.InstallRequest, cfg config.Config) (ecosystem.Adapter, error) {
@@ -137,9 +178,7 @@ func effectivePyPITarget(runtime config.PyPIRuntimeConfig, overrides cli.PyPIRun
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  sourcegate --debug npm install <package>[@<version>]")
-	fmt.Fprintln(w, "  sourcegate --debug pip install <package>[==<version>]")
-	fmt.Fprintln(w, "  sourcegate [--debug] [--python <executable>] [--target-platform <platform>] [--python-version <version>] [--implementation <name>] [--abi <abi>] pip install <package>[==<version>]")
-	fmt.Fprintln(w, "  sourcegate npm install <package>[@<version>]")
-	fmt.Fprintln(w, "  sourcegate pip install <package>[==<version>]")
+	fmt.Fprintln(w, "  sourcegate [--debug] [--format human|json] npm install <package>[@<version>]")
+	fmt.Fprintln(w, "  sourcegate [--debug] [--format human|json] pip install <package>[==<version>]")
+	fmt.Fprintln(w, "  sourcegate [--debug] [--format human|json] [--python <executable>] [--target-platform <platform>] [--python-version <version>] [--implementation <name>] [--abi <abi>] pip install <package>[==<version>]")
 }

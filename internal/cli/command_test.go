@@ -18,6 +18,9 @@ func TestParseInstallCommandNPM(t *testing.T) {
 	if req.Package.Name != "lodash" || req.Package.Version != "" {
 		t.Fatalf("package = %+v, want unversioned lodash", req.Package)
 	}
+	if req.OutputFormat != OutputFormatHuman {
+		t.Fatalf("output format = %q, want human", req.OutputFormat)
+	}
 }
 
 func TestParseInstallCommandPip(t *testing.T) {
@@ -94,10 +97,21 @@ func TestParseInstallCommandDebug(t *testing.T) {
 	}
 }
 
+func TestParseInstallCommandJSONFormat(t *testing.T) {
+	req, err := ParseInstallCommand([]string{"--format", "json", "npm", "install", "lodash"})
+	if err != nil {
+		t.Fatalf("ParseInstallCommand returned error: %v", err)
+	}
+	if req.OutputFormat != OutputFormatJSON {
+		t.Fatalf("output format = %q, want json", req.OutputFormat)
+	}
+}
+
 func TestParseInstallCommandPyPIRuntimeOptions(t *testing.T) {
 	req, err := ParseInstallCommand([]string{
 		"--abi", "cp311",
 		"--debug",
+		"--format", "human",
 		"--python", "py",
 		"--target-platform", "win_amd64",
 		"--python-version", "3.11",
@@ -108,7 +122,7 @@ func TestParseInstallCommandPyPIRuntimeOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseInstallCommand returned error: %v", err)
 	}
-	if !req.Debug || req.PyPIRuntime.PythonExecutable != "py" || req.PyPIRuntime.TargetPlatform != "win_amd64" {
+	if !req.Debug || req.OutputFormat != OutputFormatHuman || req.PyPIRuntime.PythonExecutable != "py" || req.PyPIRuntime.TargetPlatform != "win_amd64" {
 		t.Fatalf("request = %+v, want debug runtime overrides", req)
 	}
 	if len(req.PyPIRuntime.ABIs) != 2 || req.PyPIRuntime.ABIs[0] != "cp311" || req.PyPIRuntime.ABIs[1] != "abi3" {
@@ -131,6 +145,9 @@ func TestParseInstallCommandRejectsUnsupportedShapes(t *testing.T) {
 		{"pip", "install", "requests[socks]==2.31.0"},
 		{"pip", "install", "requests==2.31.0,==2.32.0"},
 		{"--debug", "--debug", "npm", "install", "lodash"},
+		{"--format", "xml", "npm", "install", "lodash"},
+		{"--format", "json", "--format", "human", "npm", "install", "lodash"},
+		{"--format", "npm", "install", "lodash"},
 		{"--verbose", "npm", "install", "lodash"},
 		{"--python", "py", "npm", "install", "lodash"},
 		{"--target-platform", "win_amd64", "npm", "install", "lodash"},

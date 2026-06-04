@@ -106,8 +106,8 @@ func TestEvaluateEmitsBlockFindingForSuspiciousLifecycleCommand(t *testing.T) {
 
 	Evaluate(&pkg, config, time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC))
 
-	if pkg.Decision != report.DecisionAllow {
-		t.Fatalf("decision = %q, want %q", pkg.Decision, report.DecisionAllow)
+	if pkg.Decision != report.DecisionBlock {
+		t.Fatalf("decision = %q, want %q", pkg.Decision, report.DecisionBlock)
 	}
 	if !hasFindingWithSeverity(pkg.Findings, levelBlock) {
 		t.Fatalf("findings = %+v, want block finding", pkg.Findings)
@@ -176,9 +176,12 @@ func TestEvaluateKeepsStrongestPyPIArtifactTier(t *testing.T) {
 	if pkg.Findings[0].Severity != levelBlock {
 		t.Fatalf("severity = %q, want %q", pkg.Findings[0].Severity, levelBlock)
 	}
+	if pkg.Decision != report.DecisionBlock {
+		t.Fatalf("decision = %q, want %q", pkg.Decision, report.DecisionBlock)
+	}
 }
 
-func TestEvaluateEmitsBlockFindingButStillAllows(t *testing.T) {
+func TestEvaluateEmitsBlockFindingAndBlocks(t *testing.T) {
 	pkg := report.PackageReport{
 		SelectedPublishedAt: "2026-05-26T12:00:00Z",
 	}
@@ -192,8 +195,8 @@ func TestEvaluateEmitsBlockFindingButStillAllows(t *testing.T) {
 
 	Evaluate(&pkg, config, time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC))
 
-	if pkg.Decision != report.DecisionAllow {
-		t.Fatalf("decision = %q, want %q", pkg.Decision, report.DecisionAllow)
+	if pkg.Decision != report.DecisionBlock {
+		t.Fatalf("decision = %q, want %q", pkg.Decision, report.DecisionBlock)
 	}
 	if len(pkg.Findings) != 1 || pkg.Findings[0].Severity != levelBlock {
 		t.Fatalf("unexpected findings: %+v", pkg.Findings)
@@ -319,7 +322,7 @@ func TestEvaluateLeavesInspectOnlyWhenFlexibleFalseValuesDisablePolicy(t *testin
 	pkg := report.PackageReport{
 		Ecosystem:           "PyPI",
 		Name:                "reqeusts",
-		SelectedPublishedAt:   "2026-05-29T12:00:00Z",
+		SelectedPublishedAt: "2026-05-29T12:00:00Z",
 		PreviousPublishedAt: "2025-01-01T12:00:00Z",
 		LifecycleScripts:    map[string]string{"postinstall": "node setup.js"},
 	}
@@ -456,7 +459,7 @@ func TestEvaluateWithOptionsCollectsDisabledTraceWhenPolicyDisabled(t *testing.T
 func TestEvaluateWithOptionsMarksUnreliableHistoryIndeterminate(t *testing.T) {
 	pkg := report.PackageReport{
 		Ecosystem:           "npm",
-		SelectedPublishedAt:   "2026-05-29T00:00:00Z",
+		SelectedPublishedAt: "2026-05-29T00:00:00Z",
 		PreviousPublishedAt: "2026-01-01T00:00:00Z",
 		NPMHistory: report.HistoryDiagnostics{
 			IndeterminateReason: "npm release history contains malformed version or publish-time metadata",

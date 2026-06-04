@@ -1,17 +1,18 @@
 # SourceGate Design
 
-SourceGate is a metadata inspection CLI for package-install-shaped commands. It currently accepts npm and pip install commands with optional exact package versions, fetches public registry metadata, runs deterministic policy checks, renders a human-readable report, and exits without installing anything.
+SourceGate is a metadata inspection CLI for package-install-shaped commands. It currently accepts npm and pip install commands with optional exact package versions, fetches public registry metadata, runs deterministic policy checks, renders human-readable or JSON output, and exits without installing anything.
 
 ## Runtime Flow
 
 The high-level flow is:
 
 1. `cmd/sourcegate` creates a bounded context and HTTP client.
-2. `internal/cli` parses commands shaped like `sourcegate npm install <package>[@<version>]` or `sourcegate pip install <package>[==<version>]`, with global prefix options such as `--debug` and PyPI target overrides.
+2. `internal/cli` parses commands shaped like `sourcegate npm install <package>[@<version>]` or `sourcegate pip install <package>[==<version>]`, with global prefix options such as `--debug`, `--format`, and PyPI target overrides.
 3. `internal/app` loads `sourcegate.config.json`, selects an ecosystem adapter, fetches metadata for the parsed package spec, runs policy checks, and renders output.
 4. `internal/ecosystem/npm` or `internal/ecosystem/pypi` selects either the requested exact version or the registry latest release and converts registry responses into a shared `report.PackageReport`.
 5. `internal/checks` evaluates configured policy tiers and appends findings to the report.
-6. `internal/output` renders the report for humans and appends an evaluation trace when debug mode is enabled.
+6. `internal/output` renders either human output or a structured JSON envelope.
+7. `cmd/sourcegate` exits with a deterministic CI status code based on the highest finding severity.
 
 The CLI does not invoke `npm`, package installation, or any package lifecycle hook. PyPI install-target provenance inspection may run local `<python> -m pip debug --verbose` to resolve compatibility tags.
 
@@ -28,7 +29,7 @@ internal/ecosystem/npm/  npm registry metadata client
 internal/ecosystem/pypi/ PyPI registry metadata and Integrity API client
 internal/checks/         Policy tier runner
 internal/checks/*/       Individual risk checks
-internal/output/         Human-readable output rendering
+internal/output/         Human-readable and JSON output rendering
 internal/text/           Small shared text helpers
 ```
 
@@ -54,6 +55,20 @@ PyPI-specific metadata currently includes:
 
 Checks should read from `PackageReport` and return findings without performing package-manager actions.
 
+## Output And Exit Codes
+
+Human output remains the default. `--format json` writes a pretty-printed JSON object with `schema_version`, `sourcegate_version`, `install_executed`, and the full evaluated package report.
+
+Operational and usage errors are written as plain text to stderr and do not emit partial JSON.
+
+Exit codes are:
+
+- `0`: no policy findings.
+- `10`: highest finding severity is `INFORM`.
+- `20`: highest finding severity is `ALERT`.
+- `30`: highest finding severity is `BLOCK`.
+- `2`: usage, configuration, registry, network, parse, or other operational errors.
+
 ## Version Selection
 
 Unversioned requests preserve the original behavior and inspect the registry latest release. Exact-version requests inspect only the requested release:
@@ -75,7 +90,7 @@ The policy model has three tiers:
 
 `internal/checks` evaluates tiers from strongest to weakest for each check: `block`, then `alert`, then `inform`. If the same check matches multiple tiers, only the strongest matching tier is reported for that check.
 
-The `block` tier is currently a reported finding level only. It does not enforce install blocking because SourceGate does not run installs yet.
+The `block` tier sets the report decision to `BLOCK` and exits with code `30`. SourceGate still does not run or block a real package-manager install.
 
 Config also influences adapter fetch behavior. For PyPI, `internal/app` inspects all tiers before constructing the adapter:
 
@@ -98,7 +113,7 @@ Individual check packages determine whether a condition matches and provide the 
 
 ## Debug Evaluation Trace
 
-`sourcegate --debug <npm|pip> install <package>` appends a concise human-readable trace to standard output after the normal report. Each trace entry has a stable check identifier, a status (`MATCH`, `NO MATCH`, `DISABLED`, `NOT APPLICABLE`, or `INDETERMINATE`), an optional matched severity, and ordered evidence lines. Exact-version package specs use the same trace format.
+`sourcegate --debug <npm|pip> install <package>` collects a concise evaluation trace. Human output appends that trace after the normal report; JSON output includes it under `report.debug_trace`. Each trace entry has a stable check identifier, a status (`MATCH`, `NO MATCH`, `DISABLED`, `NOT APPLICABLE`, or `INDETERMINATE`), an optional matched severity, and ordered evidence lines. Exact-version package specs use the same trace format.
 
 Debug mode is observational only. It does not enable disabled checks, change findings, or request additional registry metadata. The trace summarizes successful PyPI provenance checks and expands only bounded missing or error examples to keep output readable for packages with many artifacts.
 
