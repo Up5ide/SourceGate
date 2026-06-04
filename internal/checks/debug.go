@@ -12,17 +12,17 @@ import (
 )
 
 func releaseAgeEvidence(pkg report.PackageReport, now time.Time) []string {
-	evidence := []string{"latest published: " + valueOrUnavailable(pkg.LatestPublishedAt)}
-	latest, err := parseRegistryTime(pkg.LatestPublishedAt)
+	evidence := []string{"selected published: " + valueOrUnavailable(pkg.SelectedPublishedAt)}
+	selected, err := parseRegistryTime(pkg.SelectedPublishedAt)
 	if err != nil {
 		return append(evidence, "release age: unavailable")
 	}
-	return append(evidence, "release age: "+formatDuration(now.UTC().Sub(latest.UTC())))
+	return append(evidence, "release age: "+formatDuration(now.UTC().Sub(selected.UTC())))
 }
 
 func dormantReleaseEvidence(pkg report.PackageReport) []string {
 	evidence := []string{
-		"latest published: " + valueOrUnavailable(pkg.LatestPublishedAt),
+		"selected published: " + valueOrUnavailable(pkg.SelectedPublishedAt),
 		"previous published: " + valueOrUnavailable(pkg.PreviousPublishedAt),
 	}
 	diagnostics := pkg.PyPIHistory
@@ -39,12 +39,12 @@ func dormantReleaseEvidence(pkg report.PackageReport) []string {
 	if diagnostics.IndeterminateReason != "" {
 		evidence = append(evidence, "history reliability: indeterminate: "+diagnostics.IndeterminateReason)
 	}
-	latest, latestErr := parseRegistryTime(pkg.LatestPublishedAt)
+	selected, selectedErr := parseRegistryTime(pkg.SelectedPublishedAt)
 	previous, previousErr := parseRegistryTime(pkg.PreviousPublishedAt)
-	if latestErr != nil || previousErr != nil {
+	if selectedErr != nil || previousErr != nil {
 		return append(evidence, "inactivity gap: unavailable")
 	}
-	return append(evidence, "inactivity gap: "+formatDuration(latest.UTC().Sub(previous.UTC())))
+	return append(evidence, "inactivity gap: "+formatDuration(selected.UTC().Sub(previous.UTC())))
 }
 
 func valuesOrNone(values []string) string {

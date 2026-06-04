@@ -89,8 +89,8 @@ type PackageReport struct {
 	Ecosystem           string
 	Registry            string
 	Name                string
-	LatestVersion       string
-	LatestPublishedAt   string
+	SelectedVersion     string
+	SelectedPublishedAt string
 	PreviousPublishedAt string
 	Description         string
 	License             string
@@ -98,7 +98,7 @@ type PackageReport struct {
 	Maintainers         []string
 	LifecycleScripts    map[string]string
 	LifecycleHistory    []VersionLifecycleScripts
-	PyPILatestRelease   PyPIReleaseInfo
+	PyPISelectedRelease PyPIReleaseInfo
 	PyPIReleaseHistory  []PyPIReleaseInfo
 	ProjectURLs         []string
 	CreatedAt           string

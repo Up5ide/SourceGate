@@ -8,7 +8,7 @@ import (
 
 func TestCheckBlocksDormantRelease(t *testing.T) {
 	findings := Check(report.PackageReport{
-		LatestPublishedAt:   "2026-05-27T12:00:00Z",
+		SelectedPublishedAt:   "2026-05-27T12:00:00Z",
 		PreviousPublishedAt: "2025-05-27T12:00:00Z",
 	}, 180)
 
@@ -19,7 +19,7 @@ func TestCheckBlocksDormantRelease(t *testing.T) {
 
 func TestCheckAllowsNonDormantRelease(t *testing.T) {
 	findings := Check(report.PackageReport{
-		LatestPublishedAt:   "2026-05-27T12:00:00Z",
+		SelectedPublishedAt:   "2026-05-27T12:00:00Z",
 		PreviousPublishedAt: "2026-04-27T12:00:00Z",
 	}, 180)
 
@@ -30,7 +30,7 @@ func TestCheckAllowsNonDormantRelease(t *testing.T) {
 
 func TestCheckSkipsDormantCheckForFirstRelease(t *testing.T) {
 	findings := Check(report.PackageReport{
-		LatestPublishedAt: "2026-05-27T12:00:00Z",
+		SelectedPublishedAt: "2026-05-27T12:00:00Z",
 	}, 180)
 
 	if len(findings) != 0 {

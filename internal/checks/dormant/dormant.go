@@ -8,10 +8,10 @@ import (
 )
 
 func Check(pkg report.PackageReport, thresholdDays int) []report.Finding {
-	latestPublishedAt, err := parseRegistryTime(pkg.LatestPublishedAt)
+	selectedPublishedAt, err := parseRegistryTime(pkg.SelectedPublishedAt)
 	if err != nil {
 		return []report.Finding{{
-			Message: "latest release publish time is unavailable or invalid",
+			Message: "selected release publish time is unavailable or invalid",
 		}}
 	}
 
@@ -20,12 +20,12 @@ func Check(pkg report.PackageReport, thresholdDays int) []report.Finding {
 		return nil
 	}
 
-	inactivity := latestPublishedAt.UTC().Sub(previousPublishedAt.UTC())
+	inactivity := selectedPublishedAt.UTC().Sub(previousPublishedAt.UTC())
 	threshold := time.Duration(thresholdDays) * 24 * time.Hour
 	if inactivity >= threshold {
 		return []report.Finding{{
 			Message: fmt.Sprintf(
-				"latest release follows %d day(s) of package inactivity, meeting or exceeding configured threshold of %d day(s)",
+				"selected release follows %d day(s) of package inactivity, meeting or exceeding configured threshold of %d day(s)",
 				int(inactivity.Hours()/24),
 				thresholdDays,
 			),

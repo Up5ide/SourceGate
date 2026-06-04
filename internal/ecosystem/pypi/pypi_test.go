@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sourcegate/sourcegate/internal/ecosystem"
 	"github.com/sourcegate/sourcegate/internal/report"
 )
 
@@ -19,8 +20,8 @@ func TestFetchMetadata(t *testing.T) {
 		if r.URL.Path != "/requests/json" {
 			t.Fatalf("path = %q, want /requests/json", r.URL.Path)
 		}
-		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.5.2" {
-			t.Fatalf("user agent = %q, want sourcegate/0.5.2", got)
+		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.6.0" {
+			t.Fatalf("user agent = %q, want sourcegate/0.6.0", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
@@ -49,16 +50,16 @@ func TestFetchMetadata(t *testing.T) {
 	BaseURL = server.URL
 	defer func() { BaseURL = oldBase }()
 
-	report, err := New(server.Client()).FetchMetadata(context.Background(), "requests")
+	report, err := New(server.Client()).FetchMetadata(context.Background(), ecosystem.PackageSpec{Name: "requests"})
 	if err != nil {
 		t.Fatalf("FetchMetadata returned error: %v", err)
 	}
 
-	if report.Name != "requests" || report.LatestVersion != "2.32.3" || report.VersionCount != 2 {
+	if report.Name != "requests" || report.SelectedVersion != "2.32.3" || report.VersionCount != 2 {
 		t.Fatalf("unexpected report: %+v", report)
 	}
-	if report.LatestPublishedAt != "2024-05-29T00:00:00.000000Z" {
-		t.Fatalf("latest published = %q", report.LatestPublishedAt)
+	if report.SelectedPublishedAt != "2024-05-29T00:00:00.000000Z" {
+		t.Fatalf("latest published = %q", report.SelectedPublishedAt)
 	}
 	if report.PreviousPublishedAt != "2024-05-21T00:00:00.000000Z" {
 		t.Fatalf("previous published = %q", report.PreviousPublishedAt)
@@ -231,8 +232,8 @@ func provenanceFixtureFiles() []report.PyPIReleaseFile {
 
 func TestFetchMetadataWithArtifactOptions(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.5.2" {
-			t.Fatalf("user agent = %q, want sourcegate/0.5.2", got)
+		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.6.0" {
+			t.Fatalf("user agent = %q, want sourcegate/0.6.0", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -313,25 +314,25 @@ func TestFetchMetadataWithArtifactOptions(t *testing.T) {
 	report, err := NewWithOptions(server.Client(), Options{
 		HistoryVersions:  1,
 		ProvenanceScopes: []string{ProvenanceScopeAllArtifacts},
-	}).FetchMetadata(context.Background(), "requests")
+	}).FetchMetadata(context.Background(), ecosystem.PackageSpec{Name: "requests"})
 	if err != nil {
 		t.Fatalf("FetchMetadata returned error: %v", err)
 	}
 
-	if !report.PyPILatestRelease.DependenciesKnown {
+	if !report.PyPISelectedRelease.DependenciesKnown {
 		t.Fatalf("latest dependencies known = false, want true")
 	}
-	if strings.Join(report.PyPILatestRelease.Dependencies, ",") != "charset-normalizer,urllib3" {
-		t.Fatalf("latest dependencies = %v, want normalized names", report.PyPILatestRelease.Dependencies)
+	if strings.Join(report.PyPISelectedRelease.Dependencies, ",") != "charset-normalizer,urllib3" {
+		t.Fatalf("latest dependencies = %v, want normalized names", report.PyPISelectedRelease.Dependencies)
 	}
-	if len(report.PyPILatestRelease.Files) != 2 {
-		t.Fatalf("latest files = %+v, want 2 files", report.PyPILatestRelease.Files)
+	if len(report.PyPISelectedRelease.Files) != 2 {
+		t.Fatalf("latest files = %+v, want 2 files", report.PyPISelectedRelease.Files)
 	}
-	if !report.PyPILatestRelease.Files[0].ProvenanceChecked || !report.PyPILatestRelease.Files[0].ProvenanceAvailable {
-		t.Fatalf("wheel provenance = %+v, want available", report.PyPILatestRelease.Files[0])
+	if !report.PyPISelectedRelease.Files[0].ProvenanceChecked || !report.PyPISelectedRelease.Files[0].ProvenanceAvailable {
+		t.Fatalf("wheel provenance = %+v, want available", report.PyPISelectedRelease.Files[0])
 	}
-	if !report.PyPILatestRelease.Files[1].ProvenanceChecked || report.PyPILatestRelease.Files[1].ProvenanceAvailable {
-		t.Fatalf("sdist provenance = %+v, want checked missing", report.PyPILatestRelease.Files[1])
+	if !report.PyPISelectedRelease.Files[1].ProvenanceChecked || report.PyPISelectedRelease.Files[1].ProvenanceAvailable {
+		t.Fatalf("sdist provenance = %+v, want checked missing", report.PyPISelectedRelease.Files[1])
 	}
 	if len(report.PyPIReleaseHistory) != 1 {
 		t.Fatalf("history = %+v, want 1 release", report.PyPIReleaseHistory)
@@ -341,5 +342,112 @@ func TestFetchMetadataWithArtifactOptions(t *testing.T) {
 	}
 	if !report.PyPIReleaseHistory[0].DependenciesKnown || strings.Join(report.PyPIReleaseHistory[0].Dependencies, ",") != "certifi" {
 		t.Fatalf("history dependencies = %+v, known=%v, want certifi", report.PyPIReleaseHistory[0].Dependencies, report.PyPIReleaseHistory[0].DependenciesKnown)
+	}
+}
+
+func TestFetchMetadataSelectsExactVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/requests/json":
+			w.Write([]byte(`{
+				"info": {
+					"name": "requests",
+					"version": "2.32.3",
+					"summary": "Latest summary",
+					"requires_dist": ["latest-dep>=1"]
+				},
+				"releases": {
+					"2.31.0": [{
+						"filename": "requests-2.31.0.tar.gz",
+						"packagetype": "sdist",
+						"size": 1000,
+						"upload_time_iso_8601": "2023-05-22T00:00:00.000000Z",
+						"digests": {"sha256": "selected"}
+					}],
+					"2.32.3": [{
+						"filename": "requests-2.32.3.tar.gz",
+						"packagetype": "sdist",
+						"size": 2000,
+						"upload_time_iso_8601": "2024-05-29T00:00:00.000000Z",
+						"digests": {"sha256": "latest"}
+					}]
+				}
+			}`))
+		case "/requests/2.31.0/json":
+			w.Write([]byte(`{
+				"info": {
+					"name": "requests",
+					"version": "2.31.0",
+					"summary": "Selected summary",
+					"license": "Apache-2.0",
+					"requires_dist": ["urllib3>=1.21.1"]
+				},
+				"urls": [{
+					"filename": "requests-2.31.0-py3-none-any.whl",
+					"packagetype": "bdist_wheel",
+					"size": 900,
+					"upload_time_iso_8601": "2023-05-22T00:01:00.000000Z",
+					"digests": {"sha256": "selected-wheel"}
+				}]
+			}`))
+		case "/integrity/requests/2.31.0/requests-2.31.0-py3-none-any.whl/provenance":
+			http.NotFound(w, r)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldBase := BaseURL
+	oldIntegrityBase := IntegrityBaseURL
+	BaseURL = server.URL
+	IntegrityBaseURL = server.URL + "/integrity"
+	defer func() {
+		BaseURL = oldBase
+		IntegrityBaseURL = oldIntegrityBase
+	}()
+
+	report, err := NewWithOptions(server.Client(), Options{
+		ProvenanceScopes: []string{ProvenanceScopeAllArtifacts},
+	}).FetchMetadata(context.Background(), ecosystem.PackageSpec{Name: "requests", Version: "2.31.0"})
+	if err != nil {
+		t.Fatalf("FetchMetadata returned error: %v", err)
+	}
+
+	if report.SelectedVersion != "2.31.0" || report.SelectedPublishedAt != "2023-05-22T00:01:00.000000Z" {
+		t.Fatalf("selected release = %s %s, want version-specific release", report.SelectedVersion, report.SelectedPublishedAt)
+	}
+	if report.Description != "Selected summary" || report.License != "Apache-2.0" {
+		t.Fatalf("metadata = %q %q, want version-specific metadata", report.Description, report.License)
+	}
+	if strings.Join(report.PyPISelectedRelease.Dependencies, ",") != "urllib3" {
+		t.Fatalf("dependencies = %v, want version-specific dependencies", report.PyPISelectedRelease.Dependencies)
+	}
+	if len(report.PyPISelectedRelease.Files) != 1 || report.PyPISelectedRelease.Files[0].Filename != "requests-2.31.0-py3-none-any.whl" {
+		t.Fatalf("files = %+v, want version-specific URLs", report.PyPISelectedRelease.Files)
+	}
+	if !report.PyPISelectedRelease.Files[0].ProvenanceChecked {
+		t.Fatalf("selected file provenance was not checked: %+v", report.PyPISelectedRelease.Files[0])
+	}
+}
+
+func TestFetchMetadataRejectsMissingExactVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"info": {"name": "requests", "version": "2.32.3"},
+			"releases": {"2.32.3": [{"upload_time_iso_8601": "2024-05-29T00:00:00.000000Z"}]}
+		}`))
+	}))
+	defer server.Close()
+
+	oldBase := BaseURL
+	BaseURL = server.URL
+	defer func() { BaseURL = oldBase }()
+
+	_, err := New(server.Client()).FetchMetadata(context.Background(), ecosystem.PackageSpec{Name: "requests", Version: "2.31.0"})
+	if err == nil || !strings.Contains(err.Error(), "PyPI package version not found") {
+		t.Fatalf("error = %v, want missing version error", err)
 	}
 }

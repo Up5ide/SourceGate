@@ -117,7 +117,7 @@ func TestCheckHistoryChangesReportsUnknownHistory(t *testing.T) {
 func TestCheckDormantAddedReportsLifecycleScriptAfterDormancy(t *testing.T) {
 	findings := CheckDormantAdded(report.PackageReport{
 		Ecosystem:           "npm",
-		LatestPublishedAt:   "2026-05-27T12:00:00Z",
+		SelectedPublishedAt:   "2026-05-27T12:00:00Z",
 		PreviousPublishedAt: "2025-01-01T12:00:00Z",
 		LifecycleScripts: map[string]string{
 			"postinstall": "node setup.js",

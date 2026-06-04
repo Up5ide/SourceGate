@@ -245,7 +245,7 @@ func commandTokens(command string) []string {
 }
 
 func dormantReleaseGap(pkg report.PackageReport, thresholdDays int) (int, bool) {
-	latestPublishedAt, err := parseRegistryTime(pkg.LatestPublishedAt)
+	selectedPublishedAt, err := parseRegistryTime(pkg.SelectedPublishedAt)
 	if err != nil {
 		return 0, false
 	}
@@ -254,7 +254,7 @@ func dormantReleaseGap(pkg report.PackageReport, thresholdDays int) (int, bool) 
 		return 0, false
 	}
 
-	inactivity := latestPublishedAt.UTC().Sub(previousPublishedAt.UTC())
+	inactivity := selectedPublishedAt.UTC().Sub(previousPublishedAt.UTC())
 	threshold := time.Duration(thresholdDays) * 24 * time.Hour
 	if inactivity < threshold {
 		return 0, false

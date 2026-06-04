@@ -1,15 +1,15 @@
 # SourceGate Design
 
-SourceGate is a metadata inspection CLI for package-install-shaped commands. It currently accepts npm and pip install commands, fetches public registry metadata, runs deterministic policy checks, renders a human-readable report, and exits without installing anything.
+SourceGate is a metadata inspection CLI for package-install-shaped commands. It currently accepts npm and pip install commands with optional exact package versions, fetches public registry metadata, runs deterministic policy checks, renders a human-readable report, and exits without installing anything.
 
 ## Runtime Flow
 
 The high-level flow is:
 
 1. `cmd/sourcegate` creates a bounded context and HTTP client.
-2. `internal/cli` parses commands shaped like `sourcegate npm install <package>` or `sourcegate pip install <package>`, with global prefix options such as `--debug` and PyPI target overrides.
-3. `internal/app` loads `sourcegate.config.json`, selects an ecosystem adapter, fetches package metadata, runs policy checks, and renders output.
-4. `internal/ecosystem/npm` or `internal/ecosystem/pypi` converts registry responses into a shared `report.PackageReport`.
+2. `internal/cli` parses commands shaped like `sourcegate npm install <package>[@<version>]` or `sourcegate pip install <package>[==<version>]`, with global prefix options such as `--debug` and PyPI target overrides.
+3. `internal/app` loads `sourcegate.config.json`, selects an ecosystem adapter, fetches metadata for the parsed package spec, runs policy checks, and renders output.
+4. `internal/ecosystem/npm` or `internal/ecosystem/pypi` selects either the requested exact version or the registry latest release and converts registry responses into a shared `report.PackageReport`.
 5. `internal/checks` evaluates configured policy tiers and appends findings to the report.
 6. `internal/output` renders the report for humans and appends an evaluation trace when debug mode is enabled.
 
@@ -38,21 +38,30 @@ Tests live next to the package they cover using Go's `*_test.go` convention.
 
 `report.PackageReport` is the boundary between registry adapters, policy checks, and output rendering.
 
-Common fields include ecosystem, registry, package name, latest version, publish timestamps, description, license, author, maintainers, project URLs, version count, policy summary, decision, findings, and optional debug trace entries.
+Common fields include ecosystem, registry, package name, selected version, publish timestamps, description, license, author, maintainers, project URLs, version count, policy summary, decision, findings, and optional debug trace entries.
 
 npm-specific metadata currently includes:
 
-- Latest-version lifecycle scripts.
+- Selected-version lifecycle scripts.
 - Recent lifecycle script history by version.
 
 PyPI-specific metadata currently includes:
 
-- Latest-release files, file sizes, package types, wheel tags, Python requirements, digests, yanked state, and provenance availability.
+- Selected-release files, file sizes, package types, wheel tags, Python requirements, digests, yanked state, and provenance availability.
 - Recent release history with artifact metadata.
 - Normalized required and optional dependency names when dependency metadata is available and not dynamic.
 - Target-scoped provenance selection and history-selection diagnostics.
 
 Checks should read from `PackageReport` and return findings without performing package-manager actions.
+
+## Version Selection
+
+Unversioned requests preserve the original behavior and inspect the registry latest release. Exact-version requests inspect only the requested release:
+
+- npm accepts `<package>@<semver>` and scoped packages such as `@scope/pkg@1.2.3`.
+- PyPI accepts `<package>==<pep440-version>`.
+- Missing requested versions are hard errors; SourceGate does not fall back to latest.
+- Ranges, npm dist-tags, extras, compound PyPI specifiers, lockfiles, and dependency resolution are out of scope.
 
 ## Configuration And Policy Tiers
 
@@ -89,7 +98,7 @@ Individual check packages determine whether a condition matches and provide the 
 
 ## Debug Evaluation Trace
 
-`sourcegate --debug <npm|pip> install <package>` appends a concise human-readable trace to standard output after the normal report. Each trace entry has a stable check identifier, a status (`MATCH`, `NO MATCH`, `DISABLED`, `NOT APPLICABLE`, or `INDETERMINATE`), an optional matched severity, and ordered evidence lines.
+`sourcegate --debug <npm|pip> install <package>` appends a concise human-readable trace to standard output after the normal report. Each trace entry has a stable check identifier, a status (`MATCH`, `NO MATCH`, `DISABLED`, `NOT APPLICABLE`, or `INDETERMINATE`), an optional matched severity, and ordered evidence lines. Exact-version package specs use the same trace format.
 
 Debug mode is observational only. It does not enable disabled checks, change findings, or request additional registry metadata. The trace summarizes successful PyPI provenance checks and expands only bounded missing or error examples to keep output readable for packages with many artifacts.
 

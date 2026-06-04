@@ -19,7 +19,7 @@ func ArtifactHistoryEvidence(pkg report.PackageReport, historyVersions int) []st
 func ArtifactShapeEvidence(pkg report.PackageReport, historyVersions int) []string {
 	history := limitedHistory(pkg.PyPIReleaseHistory, historyVersions)
 	return []string{
-		fmt.Sprintf("latest release files: %d", len(pkg.PyPILatestRelease.Files)),
+		fmt.Sprintf("selected release files: %d", len(pkg.PyPISelectedRelease.Files)),
 		fmt.Sprintf("compared artifact history versions: %d", len(history)),
 	}
 }
@@ -79,7 +79,7 @@ func ProvenanceEvidence(pkg report.PackageReport) []string {
 func ReleaseFileCountEvidence(pkg report.PackageReport, historyVersions int) []string {
 	latest, historicalMedian := releaseFileCountStats(pkg, historyVersions)
 	return []string{
-		fmt.Sprintf("latest release file count: %d", latest),
+		fmt.Sprintf("selected release file count: %d", latest),
 		fmt.Sprintf("historical median file count: %d", historicalMedian),
 	}
 }
@@ -90,7 +90,7 @@ func provenanceScopeEvidence(pkg report.PackageReport, scope string) []string {
 	available := 0
 	var missing []string
 	var errors []string
-	for _, file := range pkg.PyPILatestRelease.Files {
+	for _, file := range pkg.PyPISelectedRelease.Files {
 		if !provenanceFileInScope(file, scope) {
 			continue
 		}

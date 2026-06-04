@@ -1,6 +1,6 @@
 package version
 
-const Current = "0.5.2"
+const Current = "0.6.0"
 
 func UserAgent() string {
 	return "sourcegate/" + Current

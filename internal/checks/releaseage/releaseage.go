@@ -8,19 +8,19 @@ import (
 )
 
 func Check(pkg report.PackageReport, minDays int, now time.Time) []report.Finding {
-	latestPublishedAt, err := parseRegistryTime(pkg.LatestPublishedAt)
+	selectedPublishedAt, err := parseRegistryTime(pkg.SelectedPublishedAt)
 	if err != nil {
 		return []report.Finding{{
-			Message: "latest release publish time is unavailable or invalid",
+			Message: "selected release publish time is unavailable or invalid",
 		}}
 	}
 
-	age := now.UTC().Sub(latestPublishedAt.UTC())
+	age := now.UTC().Sub(selectedPublishedAt.UTC())
 	requiredAge := time.Duration(minDays) * 24 * time.Hour
 	if age < requiredAge {
 		return []report.Finding{{
 			Message: fmt.Sprintf(
-				"latest release was published %s ago, below configured minimum of %d day(s)",
+				"selected release was published %s ago, below configured minimum of %d day(s)",
 				formatAge(age),
 				minDays,
 			),

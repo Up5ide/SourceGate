@@ -21,10 +21,18 @@ func NPMPrerelease(value string) (bool, error) {
 	return matches[1] != "", nil
 }
 
+func ValidNPMVersion(value string) bool {
+	return npmVersionPattern.MatchString(strings.TrimSpace(value))
+}
+
 func PyPIPreRelease(value string) (bool, error) {
 	value = strings.TrimSpace(value)
 	if !pypiVersionPattern.MatchString(value) {
 		return false, fmt.Errorf("invalid PEP 440 version %q", value)
 	}
 	return pypiPrereleasePattern.MatchString(value), nil
+}
+
+func ValidPyPIVersion(value string) bool {
+	return pypiVersionPattern.MatchString(strings.TrimSpace(value))
 }

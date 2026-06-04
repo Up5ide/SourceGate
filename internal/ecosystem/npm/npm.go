@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sourcegate/sourcegate/internal/ecosystem"
 	"github.com/sourcegate/sourcegate/internal/report"
 	"github.com/sourcegate/sourcegate/internal/text"
 	"github.com/sourcegate/sourcegate/internal/version"
@@ -72,12 +73,13 @@ type bugs struct {
 	URL string `json:"url"`
 }
 
-func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report.PackageReport, error) {
+func (a *Adapter) FetchMetadata(ctx context.Context, spec ecosystem.PackageSpec) (report.PackageReport, error) {
 	client := a.client
 	if client == nil {
 		client = http.DefaultClient
 	}
 
+	packageName := spec.Name
 	endpoint := RegistryBaseURL + "/" + url.PathEscape(packageName)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -104,26 +106,35 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 		return report.PackageReport{}, fmt.Errorf("decode npm metadata: %w", err)
 	}
 
-	latest := data.DistTags["latest"]
-	latestVersion := data.Versions[latest]
-	license := data.License
-	if license == "" && latest != "" {
-		license = latestVersion.License
+	selectedVersion := spec.Version
+	if selectedVersion == "" {
+		selectedVersion = data.DistTags["latest"]
 	}
-	historyEntries, historyDiagnostics := selectHistory(data.Time, latest, max(1, a.options.HistoryVersions))
+	selectedDoc, ok := data.Versions[selectedVersion]
+	if selectedVersion == "" || !ok {
+		if spec.Version != "" {
+			return report.PackageReport{}, fmt.Errorf("npm package version not found: %s@%s", packageName, spec.Version)
+		}
+		return report.PackageReport{}, fmt.Errorf("npm latest version is unavailable for %s", packageName)
+	}
+	license := data.License
+	if license == "" {
+		license = selectedDoc.License
+	}
+	historyEntries, historyDiagnostics := selectHistory(data.Time, selectedVersion, max(1, a.options.HistoryVersions))
 
 	return report.PackageReport{
 		Ecosystem:           "npm",
 		Registry:            "npm registry",
 		Name:                text.FirstNonEmpty(data.Name, packageName),
-		LatestVersion:       latest,
-		LatestPublishedAt:   data.Time[latest],
+		SelectedVersion:     selectedVersion,
+		SelectedPublishedAt: data.Time[selectedVersion],
 		PreviousPublishedAt: previousPublishedAt(historyEntries),
 		Description:         data.Description,
 		License:             license,
 		Author:              formatPerson(data.Author),
 		Maintainers:         formatPeople(data.Maintainers),
-		LifecycleScripts:    compactStringMap(latestVersion.Scripts),
+		LifecycleScripts:    compactStringMap(selectedDoc.Scripts),
 		LifecycleHistory:    lifecycleHistory(historyEntries, data.Versions),
 		ProjectURLs:         projectURLs(data),
 		CreatedAt:           data.Time["created"],
@@ -152,14 +163,14 @@ func lifecycleHistory(entries []lifecycleHistoryEntry, versions map[string]versi
 	return history
 }
 
-func selectHistory(times map[string]string, latestVersion string, reliabilityLimit int) ([]lifecycleHistoryEntry, report.HistoryDiagnostics) {
+func selectHistory(times map[string]string, selectedVersion string, reliabilityLimit int) ([]lifecycleHistoryEntry, report.HistoryDiagnostics) {
 	diagnostics := report.HistoryDiagnostics{}
-	latestPublishedAt, err := parseRegistryTime(times[latestVersion])
+	selectedPublishedAt, err := parseRegistryTime(times[selectedVersion])
 	if err != nil {
 		diagnostics.IndeterminateReason = "selected npm release publish time is unavailable or invalid"
 		return nil, diagnostics
 	}
-	latestPrerelease, err := versioning.NPMPrerelease(latestVersion)
+	selectedPrerelease, err := versioning.NPMPrerelease(selectedVersion)
 	if err != nil {
 		diagnostics.IndeterminateReason = err.Error()
 		return nil, diagnostics
@@ -168,7 +179,7 @@ func selectHistory(times map[string]string, latestVersion string, reliabilityLim
 	var entries []lifecycleHistoryEntry
 	var malformedVersions []lifecycleHistoryEntry
 	for version, publishedAt := range times {
-		if version == "created" || version == "modified" || version == latestVersion {
+		if version == "created" || version == "modified" || version == selectedVersion {
 			continue
 		}
 		published, err := parseRegistryTime(publishedAt)
@@ -176,7 +187,7 @@ func selectHistory(times map[string]string, latestVersion string, reliabilityLim
 			diagnostics.SkippedMalformedTimes = append(diagnostics.SkippedMalformedTimes, version)
 			continue
 		}
-		if !published.Before(latestPublishedAt) {
+		if !published.Before(selectedPublishedAt) {
 			diagnostics.SkippedLaterVersions++
 			continue
 		}
@@ -186,7 +197,7 @@ func selectHistory(times map[string]string, latestVersion string, reliabilityLim
 			malformedVersions = append(malformedVersions, lifecycleHistoryEntry{version: version, publishedAt: publishedAt})
 			continue
 		}
-		if !latestPrerelease && prerelease {
+		if !selectedPrerelease && prerelease {
 			diagnostics.SkippedPrereleaseVersions++
 			continue
 		}

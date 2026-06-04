@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/sourcegate/sourcegate/internal/ecosystem"
 )
 
 func TestFetchMetadata(t *testing.T) {
@@ -13,8 +15,8 @@ func TestFetchMetadata(t *testing.T) {
 		if r.URL.Path != "/lodash" {
 			t.Fatalf("path = %q, want /lodash", r.URL.Path)
 		}
-		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.5.2" {
-			t.Fatalf("user agent = %q, want sourcegate/0.5.2", got)
+		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.6.0" {
+			t.Fatalf("user agent = %q, want sourcegate/0.6.0", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
@@ -47,16 +49,16 @@ func TestFetchMetadata(t *testing.T) {
 	RegistryBaseURL = server.URL
 	defer func() { RegistryBaseURL = oldBase }()
 
-	report, err := New(server.Client()).FetchMetadata(context.Background(), "lodash")
+	report, err := New(server.Client()).FetchMetadata(context.Background(), ecosystem.PackageSpec{Name: "lodash"})
 	if err != nil {
 		t.Fatalf("FetchMetadata returned error: %v", err)
 	}
 
-	if report.Name != "lodash" || report.LatestVersion != "4.17.21" || report.VersionCount != 3 {
+	if report.Name != "lodash" || report.SelectedVersion != "4.17.21" || report.VersionCount != 3 {
 		t.Fatalf("unexpected report: %+v", report)
 	}
-	if report.LatestPublishedAt != "2021-02-20T15:42:16.891Z" {
-		t.Fatalf("latest published = %q", report.LatestPublishedAt)
+	if report.SelectedPublishedAt != "2021-02-20T15:42:16.891Z" {
+		t.Fatalf("latest published = %q", report.SelectedPublishedAt)
 	}
 	if report.PreviousPublishedAt != "2020-02-20T15:42:16.891Z" {
 		t.Fatalf("previous published = %q", report.PreviousPublishedAt)
@@ -78,6 +80,76 @@ func TestFetchMetadata(t *testing.T) {
 	}
 	if report.LifecycleHistory[1].Version != "4.17.19" || !report.LifecycleHistory[1].ScriptsKnown || len(report.LifecycleHistory[1].Scripts) != 0 {
 		t.Fatalf("second lifecycle history entry = %+v, want 4.17.19 with known empty scripts", report.LifecycleHistory[1])
+	}
+}
+
+func TestFetchMetadataSelectsExactVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"name": "lodash",
+			"dist-tags": {"latest": "4.17.21"},
+			"time": {
+				"created": "2019-01-01T00:00:00Z",
+				"modified": "2021-01-01T00:00:00Z",
+				"4.17.19": "2019-01-01T00:00:00Z",
+				"4.17.20": "2020-01-01T00:00:00Z",
+				"4.17.21": "2021-01-01T00:00:00Z"
+			},
+			"versions": {
+				"4.17.19": {"license": "MIT-OLD", "scripts": {"postinstall": "node old.js"}},
+				"4.17.20": {"license": "MIT-MID"},
+				"4.17.21": {"license": "MIT-NEW", "scripts": {"postinstall": "node new.js"}}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	oldBase := RegistryBaseURL
+	RegistryBaseURL = server.URL
+	defer func() { RegistryBaseURL = oldBase }()
+
+	report, err := NewWithOptions(server.Client(), Options{HistoryVersions: 2}).FetchMetadata(context.Background(), ecosystem.PackageSpec{Name: "lodash", Version: "4.17.20"})
+	if err != nil {
+		t.Fatalf("FetchMetadata returned error: %v", err)
+	}
+
+	if report.SelectedVersion != "4.17.20" || report.SelectedPublishedAt != "2020-01-01T00:00:00Z" {
+		t.Fatalf("selected release = %s %s, want 4.17.20 publish time", report.SelectedVersion, report.SelectedPublishedAt)
+	}
+	if report.License != "MIT-MID" {
+		t.Fatalf("license = %q, want selected version license", report.License)
+	}
+	if len(report.LifecycleScripts) != 0 {
+		t.Fatalf("lifecycle scripts = %+v, want selected version scripts only", report.LifecycleScripts)
+	}
+	if report.PreviousPublishedAt != "2019-01-01T00:00:00Z" {
+		t.Fatalf("previous published = %q, want release before selected version", report.PreviousPublishedAt)
+	}
+	if len(report.LifecycleHistory) != 1 || report.LifecycleHistory[0].Version != "4.17.19" {
+		t.Fatalf("history = %+v, want only versions before selected release", report.LifecycleHistory)
+	}
+}
+
+func TestFetchMetadataRejectsMissingExactVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"name": "lodash",
+			"dist-tags": {"latest": "4.17.21"},
+			"time": {"4.17.21": "2021-01-01T00:00:00Z"},
+			"versions": {"4.17.21": {}}
+		}`))
+	}))
+	defer server.Close()
+
+	oldBase := RegistryBaseURL
+	RegistryBaseURL = server.URL
+	defer func() { RegistryBaseURL = oldBase }()
+
+	_, err := New(server.Client()).FetchMetadata(context.Background(), ecosystem.PackageSpec{Name: "lodash", Version: "4.17.20"})
+	if err == nil || !strings.Contains(err.Error(), "npm package version not found") {
+		t.Fatalf("error = %v, want missing version error", err)
 	}
 }
 

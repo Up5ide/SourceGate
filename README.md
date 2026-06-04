@@ -4,17 +4,19 @@ SourceGate is a security-first Go CLI that sits in front of package managers and
 
 The long-term goal is to become a local, policy-driven enforcement layer for software supply-chain risk. SourceGate should help developers and CI systems identify risky packages, explain the reasons clearly, and eventually allow, warn, or block installation based on deterministic policy.
 
-## Version 0.5.2 Scope
+## Version 0.6.0 Scope
 
-Version 0.5.2 keeps the metadata-only inspection boundary and improves live-registry reliability.
+Version 0.6.0 keeps the metadata-only inspection boundary and adds optional exact-version inspection.
 
-SourceGate does not install packages, download package archives, or invoke the real package manager. It accepts familiar install-shaped commands and fetches public registry metadata for the requested package.
+SourceGate does not install packages, download package archives, or invoke the real package manager. It accepts familiar install-shaped commands and fetches public registry metadata for the requested package and selected release.
 
 Supported command shape:
 
 ```bash
 sourcegate npm install <package>
+sourcegate npm install <package>@<version>
 sourcegate pip install <package>
+sourcegate pip install <package>==<version>
 sourcegate --debug npm install <package>
 sourcegate --debug pip install <package>
 sourcegate --debug --python python --target-platform linux_x86_64 --python-version 3.12 --implementation cp --abi cp312 pip install <package>
@@ -22,10 +24,11 @@ sourcegate --debug --python python --target-platform linux_x86_64 --python-versi
 
 Expected behavior:
 
-1. Parse the ecosystem, package-manager command, and package name.
+1. Parse the ecosystem, package-manager command, package name, and optional exact version.
 2. Query the relevant public registry.
-3. Display available package metadata and tiered policy findings.
-4. Exit without installing the package.
+3. Select the requested exact version or the registry latest release when no version is requested.
+4. Display available package metadata and tiered policy findings for the selected release.
+5. Exit without installing the package.
 
 Global prefix options can be passed before the package manager. The optional `--debug` flag appends a concise evaluation trace to standard output. PyPI inspection also accepts `--python`, `--target-platform`, `--python-version`, `--implementation`, and repeatable `--abi` target overrides. Debug mode is observational only: it does not enable disabled checks, change findings, or make additional registry requests.
 
@@ -57,7 +60,7 @@ Supported behavior:
 
 - Parse install-shaped commands.
 - Identify the target ecosystem.
-- Extract the requested package name.
+- Extract the requested package name and optional exact version.
 - Query the relevant public registry.
 - Read local policy from `sourcegate.config.json`.
 - Emit tiered policy findings for release timing, package history, package names, npm lifecycle metadata, and PyPI artifact/provenance metadata.
@@ -82,7 +85,6 @@ Near-term work:
 
 - Normalize npm and PyPI metadata into a shared package report format.
 - Add structured JSON output for automation and CI.
-- Support version-specific package requests such as `lodash@4.17.21` and `requests==2.31.0`.
 - Add registry error handling for missing packages, private packages, rate limits, and network failures.
 - Add more metadata findings, such as unusual release timing and missing project information.
 

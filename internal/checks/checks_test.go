@@ -117,7 +117,7 @@ func TestEvaluateEmitsBlockFindingForSuspiciousLifecycleCommand(t *testing.T) {
 func TestEvaluateEmitsAlertFindingForPyPIArtifactShapeChange(t *testing.T) {
 	pkg := report.PackageReport{
 		Ecosystem: "PyPI",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			Files: []report.PyPIReleaseFile{{Filename: "pkg-2.0.0.tar.gz", PackageType: "sdist"}},
 		},
 		PyPIReleaseHistory: []report.PyPIReleaseInfo{{
@@ -147,7 +147,7 @@ func TestEvaluateEmitsAlertFindingForPyPIArtifactShapeChange(t *testing.T) {
 func TestEvaluateKeepsStrongestPyPIArtifactTier(t *testing.T) {
 	pkg := report.PackageReport{
 		Ecosystem: "PyPI",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			Files: []report.PyPIReleaseFile{{Filename: "pkg-2.0.0.tar.gz", PackageType: "sdist"}},
 		},
 		PyPIReleaseHistory: []report.PyPIReleaseInfo{{
@@ -180,7 +180,7 @@ func TestEvaluateKeepsStrongestPyPIArtifactTier(t *testing.T) {
 
 func TestEvaluateEmitsBlockFindingButStillAllows(t *testing.T) {
 	pkg := report.PackageReport{
-		LatestPublishedAt: "2026-05-26T12:00:00Z",
+		SelectedPublishedAt: "2026-05-26T12:00:00Z",
 	}
 	config := config.Config{
 		Policy: config.PolicyConfig{
@@ -230,7 +230,7 @@ func TestEvaluateKeepsStrongestLifecycleTier(t *testing.T) {
 
 func TestEvaluateKeepsOnlyStrongestMatchingTierPerCheck(t *testing.T) {
 	pkg := report.PackageReport{
-		LatestPublishedAt: "2026-05-27T12:00:00Z",
+		SelectedPublishedAt: "2026-05-27T12:00:00Z",
 	}
 	config := config.Config{
 		Policy: config.PolicyConfig{
@@ -261,7 +261,7 @@ func TestEvaluateKeepsOnlyStrongestMatchingTierPerCheck(t *testing.T) {
 
 func TestEvaluateAllowsWhenPolicyConfiguredButNoFindings(t *testing.T) {
 	pkg := report.PackageReport{
-		LatestPublishedAt: "2026-05-20T12:00:00Z",
+		SelectedPublishedAt: "2026-05-20T12:00:00Z",
 	}
 	config := config.Config{
 		Policy: config.PolicyConfig{
@@ -283,7 +283,7 @@ func TestEvaluateAllowsWhenPolicyConfiguredButNoFindings(t *testing.T) {
 
 func TestEvaluateLeavesInspectOnlyWhenDisabled(t *testing.T) {
 	pkg := report.PackageReport{
-		LatestPublishedAt: "2026-05-27T12:00:00Z",
+		SelectedPublishedAt: "2026-05-27T12:00:00Z",
 	}
 
 	Evaluate(&pkg, config.Config{}, time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC))
@@ -319,7 +319,7 @@ func TestEvaluateLeavesInspectOnlyWhenFlexibleFalseValuesDisablePolicy(t *testin
 	pkg := report.PackageReport{
 		Ecosystem:           "PyPI",
 		Name:                "reqeusts",
-		LatestPublishedAt:   "2026-05-29T12:00:00Z",
+		SelectedPublishedAt:   "2026-05-29T12:00:00Z",
 		PreviousPublishedAt: "2025-01-01T12:00:00Z",
 		LifecycleScripts:    map[string]string{"postinstall": "node setup.js"},
 	}
@@ -382,7 +382,7 @@ func TestEvaluateWithOptionsCollectsNPMDebugTrace(t *testing.T) {
 func TestEvaluateWithOptionsCollectsPyPIDebugTrace(t *testing.T) {
 	pkg := report.PackageReport{
 		Ecosystem: "PyPI",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			Version:           "2.0.0",
 			Dependencies:      []string{"new-dependency"},
 			DependenciesKnown: true,
@@ -456,7 +456,7 @@ func TestEvaluateWithOptionsCollectsDisabledTraceWhenPolicyDisabled(t *testing.T
 func TestEvaluateWithOptionsMarksUnreliableHistoryIndeterminate(t *testing.T) {
 	pkg := report.PackageReport{
 		Ecosystem:           "npm",
-		LatestPublishedAt:   "2026-05-29T00:00:00Z",
+		SelectedPublishedAt:   "2026-05-29T00:00:00Z",
 		PreviousPublishedAt: "2026-01-01T00:00:00Z",
 		NPMHistory: report.HistoryDiagnostics{
 			IndeterminateReason: "npm release history contains malformed version or publish-time metadata",

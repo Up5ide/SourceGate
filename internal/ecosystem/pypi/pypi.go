@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/sourcegate/sourcegate/internal/ecosystem"
 	"github.com/sourcegate/sourcegate/internal/report"
 	"github.com/sourcegate/sourcegate/internal/text"
 	sourcegateversion "github.com/sourcegate/sourcegate/internal/version"
@@ -94,12 +95,13 @@ type release struct {
 	YankedReason   string            `json:"yanked_reason"`
 }
 
-func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report.PackageReport, error) {
+func (a *Adapter) FetchMetadata(ctx context.Context, spec ecosystem.PackageSpec) (report.PackageReport, error) {
 	client := a.client
 	if client == nil {
 		client = http.DefaultClient
 	}
 
+	packageName := spec.Name
 	endpoint := BaseURL + "/" + url.PathEscape(packageName) + "/json"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -128,18 +130,43 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 
 	created, modified := releaseBounds(data.Releases)
 	name := text.FirstNonEmpty(data.Info.Name, packageName)
-	latestVersion := data.Info.Version
-	historyEntries, historyDiagnostics := selectHistory(data.Releases, latestVersion, max(1, a.options.HistoryVersions))
-	dependencies, optionalDependencies := normalizeRequirements(data.Info.RequiresDist)
-	latestRelease := report.PyPIReleaseInfo{
-		Version:              latestVersion,
-		PublishedAt:          latestReleaseTime(data.Releases[latestVersion]),
-		Files:                releaseFiles(data.Releases[latestVersion]),
+	selectedVersion := spec.Version
+	if selectedVersion == "" {
+		selectedVersion = data.Info.Version
+	}
+	selectedFiles, ok := data.Releases[selectedVersion]
+	if selectedVersion == "" || !ok {
+		if spec.Version != "" {
+			return report.PackageReport{}, fmt.Errorf("PyPI package version not found: %s==%s", packageName, spec.Version)
+		}
+		return report.PackageReport{}, fmt.Errorf("PyPI latest version is unavailable for %s", packageName)
+	}
+
+	selectedInfo := data.Info
+	selectedURLs := data.URLs
+	if spec.Version != "" && spec.Version != data.Info.Version {
+		versionData, err := fetchVersionMetadata(ctx, client, packageName, spec.Version)
+		if err != nil {
+			return report.PackageReport{}, err
+		}
+		selectedInfo = versionData.Info
+		selectedURLs = versionData.URLs
+	}
+	if len(selectedURLs) > 0 {
+		selectedFiles = selectedURLs
+	}
+
+	historyEntries, historyDiagnostics := selectHistory(data.Releases, selectedVersion, max(1, a.options.HistoryVersions))
+	dependencies, optionalDependencies := normalizeRequirements(selectedInfo.RequiresDist)
+	selectedRelease := report.PyPIReleaseInfo{
+		Version:              selectedVersion,
+		PublishedAt:          latestReleaseTime(selectedFiles),
+		Files:                releaseFiles(selectedFiles),
 		Dependencies:         dependencies,
 		OptionalDependencies: optionalDependencies,
-		DependenciesKnown:    dependenciesKnown(data.Info),
+		DependenciesKnown:    dependenciesKnown(selectedInfo),
 	}
-	provenance, warning := prepareProvenance(ctx, client, name, latestVersion, latestRelease.Files, a.options)
+	provenance, warning := prepareProvenance(ctx, client, name, selectedVersion, selectedRelease.Files, a.options)
 	var warnings []string
 	if warning != "" {
 		warnings = append(warnings, warning)
@@ -149,15 +176,15 @@ func (a *Adapter) FetchMetadata(ctx context.Context, packageName string) (report
 		Ecosystem:           "PyPI",
 		Registry:            "PyPI",
 		Name:                name,
-		LatestVersion:       latestVersion,
-		LatestPublishedAt:   latestRelease.PublishedAt,
+		SelectedVersion:     selectedVersion,
+		SelectedPublishedAt: selectedRelease.PublishedAt,
 		PreviousPublishedAt: previousPublishedAt(historyEntries),
-		Description:         data.Info.Summary,
-		License:             data.Info.License,
-		Author:              formatAuthor(data.Info.Author, data.Info.AuthorEmail),
-		PyPILatestRelease:   latestRelease,
+		Description:         text.FirstNonEmpty(selectedInfo.Summary, data.Info.Summary),
+		License:             text.FirstNonEmpty(selectedInfo.License, data.Info.License),
+		Author:              text.FirstNonEmpty(formatAuthor(selectedInfo.Author, selectedInfo.AuthorEmail), formatAuthor(data.Info.Author, data.Info.AuthorEmail)),
+		PyPISelectedRelease: selectedRelease,
 		PyPIReleaseHistory:  releaseHistory(ctx, client, name, data.Releases, historyEntries, a.options.HistoryVersions),
-		ProjectURLs:         projectURLs(data.Info),
+		ProjectURLs:         projectURLs(selectedInfo, data.Info),
 		CreatedAt:           created,
 		ModifiedAt:          modified,
 		VersionCount:        len(data.Releases),
@@ -193,6 +220,34 @@ func releaseHistory(ctx context.Context, client *http.Client, packageName string
 		})
 	}
 	return history
+}
+
+func fetchVersionMetadata(ctx context.Context, client *http.Client, packageName string, version string) (registryResponse, error) {
+	endpoint := BaseURL + "/" + url.PathEscape(packageName) + "/" + url.PathEscape(version) + "/json"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return registryResponse{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", sourcegateversion.UserAgent())
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return registryResponse{}, fmt.Errorf("fetch PyPI version metadata: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return registryResponse{}, fmt.Errorf("PyPI package version not found: %s==%s", packageName, version)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return registryResponse{}, fmt.Errorf("PyPI returned status %d for %s==%s", resp.StatusCode, packageName, version)
+	}
+
+	var data registryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return registryResponse{}, fmt.Errorf("decode PyPI version metadata: %w", err)
+	}
+	return data, nil
 }
 
 func fetchReleaseDependencies(ctx context.Context, client *http.Client, packageName string, version string) ([]string, []string, bool) {
@@ -371,14 +426,14 @@ func runCommand(ctx context.Context, executable string, args ...string) ([]byte,
 	return exec.CommandContext(ctx, executable, args...).CombinedOutput()
 }
 
-func selectHistory(releases map[string][]release, latestVersion string, reliabilityLimit int) ([]releaseHistoryEntry, report.HistoryDiagnostics) {
+func selectHistory(releases map[string][]release, selectedVersion string, reliabilityLimit int) ([]releaseHistoryEntry, report.HistoryDiagnostics) {
 	diagnostics := report.HistoryDiagnostics{}
-	latestPublishedAt, err := parseRegistryTime(latestReleaseTime(releases[latestVersion]))
+	selectedPublishedAt, err := parseRegistryTime(latestReleaseTime(releases[selectedVersion]))
 	if err != nil {
 		diagnostics.IndeterminateReason = "selected PyPI release publish time is unavailable or invalid"
 		return nil, diagnostics
 	}
-	latestPrerelease, err := versioning.PyPIPreRelease(latestVersion)
+	selectedPrerelease, err := versioning.PyPIPreRelease(selectedVersion)
 	if err != nil {
 		diagnostics.IndeterminateReason = err.Error()
 		return nil, diagnostics
@@ -387,7 +442,7 @@ func selectHistory(releases map[string][]release, latestVersion string, reliabil
 	var entries []releaseHistoryEntry
 	var malformedVersions []releaseHistoryEntry
 	for version, files := range releases {
-		if version == latestVersion {
+		if version == selectedVersion {
 			continue
 		}
 		publishedAt := latestReleaseTime(files)
@@ -396,7 +451,7 @@ func selectHistory(releases map[string][]release, latestVersion string, reliabil
 			diagnostics.SkippedMalformedTimes = append(diagnostics.SkippedMalformedTimes, version)
 			continue
 		}
-		if !published.Before(latestPublishedAt) {
+		if !published.Before(selectedPublishedAt) {
 			diagnostics.SkippedLaterVersions++
 			continue
 		}
@@ -406,7 +461,7 @@ func selectHistory(releases map[string][]release, latestVersion string, reliabil
 			malformedVersions = append(malformedVersions, releaseHistoryEntry{version: version, publishedAt: publishedAt})
 			continue
 		}
-		if !latestPrerelease && prerelease {
+		if !selectedPrerelease && prerelease {
 			diagnostics.SkippedPrereleaseVersions++
 			continue
 		}
@@ -753,10 +808,13 @@ func formatAuthor(name, email string) string {
 	}
 }
 
-func projectURLs(info info) []string {
-	values := make([]string, 0, len(info.ProjectURLs)+1)
-	values = append(values, info.HomePage)
-	for _, value := range info.ProjectURLs {
+func projectURLs(primary info, fallback info) []string {
+	if primary.HomePage == "" && len(primary.ProjectURLs) == 0 {
+		primary = fallback
+	}
+	values := make([]string, 0, len(primary.ProjectURLs)+1)
+	values = append(values, primary.HomePage)
+	for _, value := range primary.ProjectURLs {
 		values = append(values, value)
 	}
 	sort.Strings(values)

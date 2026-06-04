@@ -15,8 +15,8 @@ func TestParseInstallCommandNPM(t *testing.T) {
 	if req.Ecosystem != ecosystem.NPM {
 		t.Fatalf("ecosystem = %q, want %q", req.Ecosystem, ecosystem.NPM)
 	}
-	if req.Package != "lodash" {
-		t.Fatalf("package = %q, want lodash", req.Package)
+	if req.Package.Name != "lodash" || req.Package.Version != "" {
+		t.Fatalf("package = %+v, want unversioned lodash", req.Package)
 	}
 }
 
@@ -29,8 +29,58 @@ func TestParseInstallCommandPip(t *testing.T) {
 	if req.Ecosystem != ecosystem.PyPI {
 		t.Fatalf("ecosystem = %q, want %q", req.Ecosystem, ecosystem.PyPI)
 	}
-	if req.Package != "requests" {
-		t.Fatalf("package = %q, want requests", req.Package)
+	if req.Package.Name != "requests" || req.Package.Version != "" {
+		t.Fatalf("package = %+v, want unversioned requests", req.Package)
+	}
+}
+
+func TestParseInstallCommandNPMExactVersion(t *testing.T) {
+	req, err := ParseInstallCommand([]string{"npm", "install", "lodash@4.17.21"})
+	if err != nil {
+		t.Fatalf("ParseInstallCommand returned error: %v", err)
+	}
+	if req.Package.Name != "lodash" || req.Package.Version != "4.17.21" {
+		t.Fatalf("package = %+v, want lodash 4.17.21", req.Package)
+	}
+}
+
+func TestParseInstallCommandNPMScopedExactVersion(t *testing.T) {
+	req, err := ParseInstallCommand([]string{"npm", "install", "@scope/pkg@1.2.3"})
+	if err != nil {
+		t.Fatalf("ParseInstallCommand returned error: %v", err)
+	}
+	if req.Package.Name != "@scope/pkg" || req.Package.Version != "1.2.3" {
+		t.Fatalf("package = %+v, want scoped exact package", req.Package)
+	}
+}
+
+func TestParseInstallCommandNPMScopedUnversioned(t *testing.T) {
+	req, err := ParseInstallCommand([]string{"npm", "install", "@scope/pkg"})
+	if err != nil {
+		t.Fatalf("ParseInstallCommand returned error: %v", err)
+	}
+	if req.Package.Name != "@scope/pkg" || req.Package.Version != "" {
+		t.Fatalf("package = %+v, want scoped unversioned package", req.Package)
+	}
+}
+
+func TestParseInstallCommandPyPIExactVersion(t *testing.T) {
+	req, err := ParseInstallCommand([]string{"pip", "install", "requests==2.31.0"})
+	if err != nil {
+		t.Fatalf("ParseInstallCommand returned error: %v", err)
+	}
+	if req.Package.Name != "requests" || req.Package.Version != "2.31.0" {
+		t.Fatalf("package = %+v, want requests 2.31.0", req.Package)
+	}
+}
+
+func TestParseInstallCommandPyPIExactVersionWithEpoch(t *testing.T) {
+	req, err := ParseInstallCommand([]string{"pip", "install", "pkg==1!2.0"})
+	if err != nil {
+		t.Fatalf("ParseInstallCommand returned error: %v", err)
+	}
+	if req.Package.Name != "pkg" || req.Package.Version != "1!2.0" {
+		t.Fatalf("package = %+v, want pkg 1!2.0", req.Package)
 	}
 }
 
@@ -73,6 +123,13 @@ func TestParseInstallCommandRejectsUnsupportedShapes(t *testing.T) {
 		{"pip", "install", "-r"},
 		{"cargo", "install", "ripgrep"},
 		{"npm", "install", "lodash", "--debug"},
+		{"npm", "install", "lodash@"},
+		{"npm", "install", "lodash@latest"},
+		{"npm", "install", "lodash@^4.17.21"},
+		{"pip", "install", "requests=="},
+		{"pip", "install", "requests>=2.0.0"},
+		{"pip", "install", "requests[socks]==2.31.0"},
+		{"pip", "install", "requests==2.31.0,==2.32.0"},
 		{"--debug", "--debug", "npm", "install", "lodash"},
 		{"--verbose", "npm", "install", "lodash"},
 		{"--python", "py", "npm", "install", "lodash"},

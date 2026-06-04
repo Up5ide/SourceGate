@@ -11,13 +11,13 @@ import (
 func TestRenderHumanStatesDecisionAndFindings(t *testing.T) {
 	var buf bytes.Buffer
 	RenderHuman(&buf, report.PackageReport{
-		Ecosystem:     "npm",
-		Registry:      "npm registry",
-		Name:          "lodash",
-		LatestVersion: "4.17.21",
-		Decision:      report.DecisionAllow,
+		Ecosystem:       "npm",
+		Registry:        "npm registry",
+		Name:            "lodash",
+		SelectedVersion: "4.17.21",
+		Decision:        report.DecisionAllow,
 		Findings: []report.Finding{
-			{Severity: "ALERT", Message: "latest release was published 1 day(s) ago"},
+			{Severity: "ALERT", Message: "selected release was published 1 day(s) ago"},
 		},
 		VersionCount: 2,
 	})
@@ -26,9 +26,11 @@ func TestRenderHumanStatesDecisionAndFindings(t *testing.T) {
 	for _, want := range []string{
 		"Ecosystem: npm",
 		"Package: lodash",
+		"Selected Version: 4.17.21",
+		"Selected Published: unknown",
 		"Previous Published: unknown",
 		"Decision: ALLOW",
-		"[ALERT] latest release was published 1 day(s) ago",
+		"[ALERT] selected release was published 1 day(s) ago",
 		"Install executed: no",
 	} {
 		if !strings.Contains(output, want) {

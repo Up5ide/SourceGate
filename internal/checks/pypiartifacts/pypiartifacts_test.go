@@ -11,7 +11,7 @@ import (
 func TestCheckArtifactShapeChangeReportsSourceOnlyShift(t *testing.T) {
 	findings := CheckArtifactShapeChange(report.PackageReport{
 		Ecosystem: "PyPI",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			Files: []report.PyPIReleaseFile{{Filename: "pkg-2.0.0.tar.gz", PackageType: "sdist"}},
 		},
 		PyPIReleaseHistory: []report.PyPIReleaseInfo{{
@@ -31,7 +31,7 @@ func TestCheckArtifactShapeChangeReportsSourceOnlyShift(t *testing.T) {
 func TestCheckArtifactShapeChangeReportsNewWheelPlatformTag(t *testing.T) {
 	findings := CheckArtifactShapeChange(report.PackageReport{
 		Ecosystem: "PyPI",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			Files: []report.PyPIReleaseFile{{Filename: "pkg-2.0.0-cp311-cp311-win_amd64.whl", PackageType: "bdist_wheel"}},
 		},
 		PyPIReleaseHistory: []report.PyPIReleaseInfo{{
@@ -48,7 +48,7 @@ func TestCheckArtifactShapeChangeReportsNewWheelPlatformTag(t *testing.T) {
 func TestCheckFileSizeJumpReportsTotalAndLargestFileIncrease(t *testing.T) {
 	findings := CheckFileSizeJump(report.PackageReport{
 		Ecosystem: "PyPI",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			Files: []report.PyPIReleaseFile{
 				{Filename: "pkg-2.0.0-py3-none-any.whl", Size: 5000},
 				{Filename: "pkg-2.0.0.tar.gz", Size: 3000},
@@ -74,7 +74,7 @@ func TestCheckFileSizeJumpReportsTotalAndLargestFileIncrease(t *testing.T) {
 func TestCheckFileSizeJumpUsesIncreaseOverBaseline(t *testing.T) {
 	pkg := report.PackageReport{
 		Ecosystem: "PyPI",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			Files: []report.PyPIReleaseFile{{Filename: "pkg-2.0.0.tar.gz", Size: 3999}},
 		},
 		PyPIReleaseHistory: []report.PyPIReleaseInfo{{
@@ -86,7 +86,7 @@ func TestCheckFileSizeJumpUsesIncreaseOverBaseline(t *testing.T) {
 	if findings := CheckFileSizeJump(pkg, 5, 300); len(findings) != 0 {
 		t.Fatalf("findings = %+v, want no match below 400%% of baseline", findings)
 	}
-	pkg.PyPILatestRelease.Files[0].Size = 4000
+	pkg.PyPISelectedRelease.Files[0].Size = 4000
 	if findings := CheckFileSizeJump(pkg, 5, 300); len(findings) == 0 {
 		t.Fatalf("findings = %+v, want match at 300%% increase", findings)
 	}
@@ -95,7 +95,7 @@ func TestCheckFileSizeJumpUsesIncreaseOverBaseline(t *testing.T) {
 func TestCheckDependencyChangeReportsAddedAndRemovedDependencies(t *testing.T) {
 	findings := CheckDependencyChange(report.PackageReport{
 		Ecosystem: "PyPI",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			DependenciesKnown: true,
 			Dependencies:      []string{"requests", "urllib3"},
 		},
@@ -117,7 +117,7 @@ func TestCheckDependencyChangeReportsAddedAndRemovedDependencies(t *testing.T) {
 func TestCheckDependencyChangeReportsUnknownLatestDependencies(t *testing.T) {
 	findings := CheckDependencyChange(report.PackageReport{
 		Ecosystem: "PyPI",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			DependenciesKnown: false,
 		},
 	}, 5, false)
@@ -130,7 +130,7 @@ func TestCheckDependencyChangeReportsUnknownLatestDependencies(t *testing.T) {
 func TestCheckDependencyChangeIncludesOptionalDependenciesOnlyWhenEnabled(t *testing.T) {
 	pkg := report.PackageReport{
 		Ecosystem: "PyPI",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			DependenciesKnown:    true,
 			OptionalDependencies: []string{"socks"},
 		},
@@ -158,7 +158,7 @@ func TestProvenanceEvidenceBoundsMissingFiles(t *testing.T) {
 		})
 	}
 	evidence := ProvenanceEvidence(report.PackageReport{
-		PyPILatestRelease: report.PyPIReleaseInfo{Files: files},
+		PyPISelectedRelease: report.PyPIReleaseInfo{Files: files},
 		PyPIProvenance:    report.PyPIProvenanceSummary{RequestedScopes: []string{"install-target"}},
 	})
 
@@ -170,7 +170,7 @@ func TestProvenanceEvidenceBoundsMissingFiles(t *testing.T) {
 func TestCheckProvenanceRequiredReportsMissingAndUnknownProvenance(t *testing.T) {
 	findings := CheckProvenanceRequired(report.PackageReport{
 		Ecosystem: "PyPI",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			Files: []report.PyPIReleaseFile{
 				{Filename: "pkg-1.0.0-py3-none-any.whl", ProvenanceChecked: true, ProvenanceAvailable: false},
 				{Filename: "pkg-1.0.0.tar.gz", ProvenanceChecked: true, ProvenanceError: "PyPI Integrity API returned status 403"},
@@ -193,7 +193,7 @@ func TestCheckProvenanceRequiredReportsMissingAndUnknownProvenance(t *testing.T)
 func TestCheckReleaseFileCountChangeReportsDifferentCount(t *testing.T) {
 	findings := CheckReleaseFileCountChange(report.PackageReport{
 		Ecosystem: "PyPI",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			Files: []report.PyPIReleaseFile{{Filename: "a"}, {Filename: "b"}, {Filename: "c"}},
 		},
 		PyPIReleaseHistory: []report.PyPIReleaseInfo{
@@ -210,7 +210,7 @@ func TestCheckReleaseFileCountChangeReportsDifferentCount(t *testing.T) {
 func TestChecksIgnoreNonPyPIReports(t *testing.T) {
 	pkg := report.PackageReport{
 		Ecosystem: "npm",
-		PyPILatestRelease: report.PyPIReleaseInfo{
+		PyPISelectedRelease: report.PyPIReleaseInfo{
 			Files: []report.PyPIReleaseFile{{Filename: "pkg-1.0.0.tar.gz", PackageType: "sdist"}},
 		},
 	}

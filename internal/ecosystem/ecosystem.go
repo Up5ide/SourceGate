@@ -14,5 +14,10 @@ const (
 )
 
 type Adapter interface {
-	FetchMetadata(ctx context.Context, packageName string) (report.PackageReport, error)
+	FetchMetadata(ctx context.Context, spec PackageSpec) (report.PackageReport, error)
+}
+
+type PackageSpec struct {
+	Name    string
+	Version string
 }

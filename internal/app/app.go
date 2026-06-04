@@ -137,9 +137,9 @@ func effectivePyPITarget(runtime config.PyPIRuntimeConfig, overrides cli.PyPIRun
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  sourcegate --debug npm install <package>")
-	fmt.Fprintln(w, "  sourcegate --debug pip install <package>")
-	fmt.Fprintln(w, "  sourcegate [--debug] [--python <executable>] [--target-platform <platform>] [--python-version <version>] [--implementation <name>] [--abi <abi>] pip install <package>")
-	fmt.Fprintln(w, "  sourcegate npm install <package>")
-	fmt.Fprintln(w, "  sourcegate pip install <package>")
+	fmt.Fprintln(w, "  sourcegate --debug npm install <package>[@<version>]")
+	fmt.Fprintln(w, "  sourcegate --debug pip install <package>[==<version>]")
+	fmt.Fprintln(w, "  sourcegate [--debug] [--python <executable>] [--target-platform <platform>] [--python-version <version>] [--implementation <name>] [--abi <abi>] pip install <package>[==<version>]")
+	fmt.Fprintln(w, "  sourcegate npm install <package>[@<version>]")
+	fmt.Fprintln(w, "  sourcegate pip install <package>[==<version>]")
 }
