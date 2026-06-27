@@ -1,7 +1,34 @@
 package version
 
-const Current = "0.7.3"
+import "runtime/debug"
+
+const Current = "0.8.0"
+
+type BuildMetadata struct {
+	Commit     string
+	CommitDate string
+	Modified   string
+}
 
 func UserAgent() string {
 	return "sourcegate/" + Current
+}
+
+func Build() BuildMetadata {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return BuildMetadata{}
+	}
+	var metadata BuildMetadata
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			metadata.Commit = setting.Value
+		case "vcs.time":
+			metadata.CommitDate = setting.Value
+		case "vcs.modified":
+			metadata.Modified = setting.Value
+		}
+	}
+	return metadata
 }

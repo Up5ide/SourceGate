@@ -200,20 +200,40 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("read config %s: %w", path, err)
 	}
+	config, err := LoadBytes(data)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	return config, nil
+}
+
+func LoadRequired(path string) (Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("read config %s: %w", path, err)
+	}
+	config, err := LoadBytes(data)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	return config, nil
+}
+
+func LoadBytes(data []byte) (Config, error) {
 	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 
 	if err := validateConfigCompleteness(data); err != nil {
-		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
+		return Config{}, err
 	}
 
 	var config Config
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&config); err != nil {
-		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
+		return Config{}, err
 	}
 	if err := requireJSONEOF(decoder); err != nil {
-		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
+		return Config{}, err
 	}
 	if err := validatePyPIRuntime(config.PyPIRuntime); err != nil {
 		return Config{}, err

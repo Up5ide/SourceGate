@@ -11,12 +11,15 @@ import (
 )
 
 type InstallRequest struct {
+	Action       string
 	Ecosystem    ecosystem.Ecosystem
 	Manager      string
 	Command      string
 	Package      ecosystem.PackageSpec
 	Debug        bool
 	Inspect      bool
+	Mode         string
+	ConfigPath   string
 	OutputFormat string
 	PyPIRuntime  PyPIRuntimeOptions
 }
@@ -30,7 +33,7 @@ type PyPIRuntimeOptions struct {
 }
 
 func ParseInstallCommand(args []string) (InstallRequest, error) {
-	req := InstallRequest{OutputFormat: OutputFormatHuman}
+	req := InstallRequest{Action: ActionRun, Mode: ModeMetadata, OutputFormat: OutputFormatHuman}
 	seen := make(map[string]bool)
 	for len(args) > 0 && strings.HasPrefix(strings.TrimSpace(args[0]), "-") {
 		option := strings.TrimSpace(args[0])
@@ -49,10 +52,48 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 		}
 		seen[option] = true
 		switch option {
+		case "--help":
+			if err := setInfoAction(&req, ActionHelp, option); err != nil {
+				return InstallRequest{}, err
+			}
+		case "--version":
+			if err := setInfoAction(&req, ActionVersion, option); err != nil {
+				return InstallRequest{}, err
+			}
+		case "--print-config":
+			if err := setInfoAction(&req, ActionPrintConfig, option); err != nil {
+				return InstallRequest{}, err
+			}
+		case "--config":
+			value, remaining, err := optionValue(option, args)
+			if err != nil {
+				return InstallRequest{}, err
+			}
+			req.ConfigPath = value
+			args = remaining
 		case "--debug":
 			req.Debug = true
 		case "--inspect":
+			if seen["--mode"] {
+				return InstallRequest{}, fmt.Errorf("--inspect cannot be combined with --mode")
+			}
 			req.Inspect = true
+			req.Mode = ModeArtifact
+		case "--mode":
+			if seen["--inspect"] {
+				return InstallRequest{}, fmt.Errorf("--mode cannot be combined with --inspect")
+			}
+			value, remaining, err := optionValue(option, args)
+			if err != nil {
+				return InstallRequest{}, err
+			}
+			switch value {
+			case ModeMetadata, ModeArtifact, ModeInstall:
+				req.Mode = value
+			default:
+				return InstallRequest{}, fmt.Errorf("unsupported mode %q: supported modes are metadata, artifact, and install", value)
+			}
+			args = remaining
 		case "--format":
 			value, remaining, err := optionValue(option, args)
 			if err != nil {
@@ -94,6 +135,19 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 		default:
 			return InstallRequest{}, fmt.Errorf("unsupported sourcegate option %q", option)
 		}
+	}
+
+	if req.Action != ActionRun {
+		if len(args) != 0 {
+			return InstallRequest{}, fmt.Errorf("%s does not accept package-manager arguments", req.Action)
+		}
+		if req.Action != ActionPrintConfig && req.ConfigPath != "" {
+			return InstallRequest{}, fmt.Errorf("--config can only be used with install commands or --print-config")
+		}
+		if req.Debug || req.Mode != ModeMetadata || req.OutputFormat != OutputFormatHuman || req.hasPyPIRuntimeOptions() {
+			return InstallRequest{}, fmt.Errorf("%s cannot be combined with install options", req.Action)
+		}
+		return req, nil
 	}
 
 	if len(args) != 3 {
@@ -143,6 +197,15 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 const (
 	OutputFormatHuman = "human"
 	OutputFormatJSON  = "json"
+
+	ActionRun         = "run"
+	ActionHelp        = "help"
+	ActionVersion     = "version"
+	ActionPrintConfig = "print-config"
+
+	ModeMetadata = "metadata"
+	ModeArtifact = "artifact"
+	ModeInstall  = "install"
 )
 
 var pypiPackageNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -215,6 +278,14 @@ func optionValue(option string, args []string) (string, []string, error) {
 		return "", args, fmt.Errorf("sourcegate option %q requires a value", option)
 	}
 	return value, args[1:], nil
+}
+
+func setInfoAction(req *InstallRequest, action, option string) error {
+	if req.Action != ActionRun {
+		return fmt.Errorf("sourcegate option %q cannot be combined with another information command", option)
+	}
+	req.Action = action
+	return nil
 }
 
 func (req InstallRequest) hasPyPIRuntimeOptions() bool {

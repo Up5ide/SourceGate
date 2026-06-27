@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/sourcegate/sourcegate/internal/cli"
 	"github.com/sourcegate/sourcegate/internal/config"
+	"github.com/sourcegate/sourcegate/internal/configsource"
 	"github.com/sourcegate/sourcegate/internal/ecosystem"
 	"github.com/sourcegate/sourcegate/internal/ecosystem/npm"
 	"github.com/sourcegate/sourcegate/internal/ecosystem/pypi"
@@ -44,6 +46,124 @@ func TestAdapterForRoutesSupportedEcosystems(t *testing.T) {
 	}
 	if _, ok := pypiAdapter.(*pypi.Adapter); !ok {
 		t.Fatalf("pypi adapter type = %T", pypiAdapter)
+	}
+}
+
+func TestRunInfoCommandsDoNotRequirePackageManagerOrRegistry(t *testing.T) {
+	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected registry request")
+		return nil, nil
+	})}
+	cases := map[string]struct {
+		args []string
+		want string
+	}{
+		"help":         {args: []string{"--help"}, want: "--mode metadata"},
+		"version":      {args: []string{"--version"}, want: "SourceGate version: 0.8.0"},
+		"print config": {args: []string{"--print-config"}, want: `"config_mode"`},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var out bytes.Buffer
+			var errOut bytes.Buffer
+			result, err := New(client, &out, &errOut).Run(context.Background(), tc.args)
+			if err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			if result.ExitCode != ExitClean {
+				t.Fatalf("exit code = %d, want %d", result.ExitCode, ExitClean)
+			}
+			if errOut.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", errOut.String())
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Fatalf("stdout = %q, want %q", out.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestRunPrintConfigReportsRelaxedCustomConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "strict.json")
+	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{
+		Block: config.PolicyTierConfig{SuspiciousInstallScriptCommands: true},
+	}})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, configData, 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var out bytes.Buffer
+	result, err := newFileConfigApp(&http.Client{}, &out, &bytes.Buffer{}).Run(context.Background(), []string{"--config", configPath, "--print-config"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitClean {
+		t.Fatalf("exit code = %d, want clean", result.ExitCode)
+	}
+	var status configsource.Status
+	if err := json.Unmarshal(out.Bytes(), &status); err != nil {
+		t.Fatalf("stdout is not config status JSON: %v\n%s", err, out.String())
+	}
+	if status.ConfigPath != configPath || !status.Exists || !status.Valid || status.Config == nil {
+		t.Fatalf("status = %+v, want valid custom config", status)
+	}
+}
+
+func TestRunPrintConfigReportsInvalidRelaxedConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "broken.json")
+	if err := os.WriteFile(configPath, []byte(`{}`), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var out bytes.Buffer
+	result, err := newFileConfigApp(&http.Client{}, &out, &bytes.Buffer{}).Run(context.Background(), []string{"--config", configPath, "--print-config"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	var status configsource.Status
+	if err := json.Unmarshal(out.Bytes(), &status); err != nil {
+		t.Fatalf("stdout is not config status JSON: %v\n%s", err, out.String())
+	}
+	if result.ExitCode != ExitClean || !status.Exists || status.Valid || status.Error == "" {
+		t.Fatalf("exit = %d status = %+v, want invalid config status", result.ExitCode, status)
+	}
+}
+
+func TestRunRejectsExternalConfigWhenConfigSourceIsEmbedded(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	app := New(&http.Client{}, &out, &errOut)
+	app.acceptsExternalConfig = func() bool {
+		return false
+	}
+
+	result, err := app.Run(context.Background(), []string{"--config", "strict.json", "--print-config"})
+	if err == nil {
+		t.Fatalf("Run returned nil error")
+	}
+	if result.ExitCode != ExitOperationalError {
+		t.Fatalf("exit code = %d, want operational error", result.ExitCode)
+	}
+	if !strings.Contains(err.Error(), "does not accept --config") || !strings.Contains(errOut.String(), "Usage:") {
+		t.Fatalf("error = %v stderr = %q, want embedded config usage error", err, errOut.String())
+	}
+}
+
+func TestRunModeInstallReturnsReservedError(t *testing.T) {
+	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected registry request")
+		return nil, nil
+	})}
+	result, err := newStaticConfigApp(client, &bytes.Buffer{}, &bytes.Buffer{}, config.Config{}).Run(context.Background(), []string{"--mode", "install", "npm", "install", "lodash"})
+	if err == nil {
+		t.Fatalf("Run returned nil error")
+	}
+	if result.ExitCode != ExitOperationalError || !strings.Contains(err.Error(), "reserved for SourceGate 1.0") {
+		t.Fatalf("exit = %d error = %v, want reserved install-mode error", result.ExitCode, err)
 	}
 }
 
@@ -81,7 +201,7 @@ func TestRunRendersJSONFormat(t *testing.T) {
 
 	var out bytes.Buffer
 	var errOut bytes.Buffer
-	result, err := New(server.Client(), &out, &errOut).Run(context.Background(), []string{"--format", "json", "npm", "install", "lodash"})
+	result, err := newStaticConfigApp(server.Client(), &out, &errOut, config.Config{}).Run(context.Background(), []string{"--format", "json", "npm", "install", "lodash"})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -164,14 +284,14 @@ func TestRunDebugDoesNotChangePyPIFetchBehavior(t *testing.T) {
 	}()
 
 	var normalOutput bytes.Buffer
-	if _, err := New(server.Client(), &normalOutput, &bytes.Buffer{}).Run(context.Background(), []string{"pip", "install", "requests"}); err != nil {
+	if _, err := newFileConfigApp(server.Client(), &normalOutput, &bytes.Buffer{}).Run(context.Background(), []string{"pip", "install", "requests"}); err != nil {
 		t.Fatalf("normal Run returned error: %v", err)
 	}
 	normalPaths := append([]string(nil), paths...)
 
 	paths = nil
 	var debugOutput bytes.Buffer
-	if _, err := New(server.Client(), &debugOutput, &bytes.Buffer{}).Run(context.Background(), []string{"--debug", "pip", "install", "requests"}); err != nil {
+	if _, err := newFileConfigApp(server.Client(), &debugOutput, &bytes.Buffer{}).Run(context.Background(), []string{"--debug", "pip", "install", "requests"}); err != nil {
 		t.Fatalf("debug Run returned error: %v", err)
 	}
 	if !reflect.DeepEqual(paths, normalPaths) {
@@ -220,14 +340,14 @@ func TestRunInspectDownloadsVerifiedArtifactAndDeletesTempFile(t *testing.T) {
 	t.Setenv("TEMP", tempDirectory)
 	withWorkingDirectory(t, t.TempDir())
 
-	if result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"npm", "install", "lodash"}); err != nil {
+	if result, err := newStaticConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}, config.Config{}).Run(context.Background(), []string{"npm", "install", "lodash"}); err != nil {
 		t.Fatalf("normal Run returned error: %v", err)
 	} else if artifactRequests != 0 || result.Report.ArtifactDownload != nil {
 		t.Fatalf("normal run artifact requests = %d summary = %+v, want metadata-only", artifactRequests, result.Report.ArtifactDownload)
 	}
 
 	var out bytes.Buffer
-	result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &out, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "lodash"})
+	result, err := newStaticConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &out, &bytes.Buffer{}, config.Config{}).Run(context.Background(), []string{"--mode", "artifact", "npm", "install", "lodash"})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -285,7 +405,7 @@ func TestRunInspectAppliesArchivePolicyFindings(t *testing.T) {
 	}
 	withWorkingDirectory(t, workspace)
 
-	result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
+	result, err := newFileConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -339,13 +459,13 @@ func TestRunInspectAppliesExecutionSurfacePolicyFindings(t *testing.T) {
 	}
 	withWorkingDirectory(t, workspace)
 
-	if result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"npm", "install", "pkg"}); err != nil {
+	if result, err := newFileConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"npm", "install", "pkg"}); err != nil {
 		t.Fatalf("normal Run returned error: %v", err)
 	} else if artifactRequests != 0 || result.Report.ArtifactInspection != nil || hasFindingContaining(result.Report.Findings, "execution surface") {
 		t.Fatalf("normal run artifact requests = %d report = %+v, want metadata-only", artifactRequests, result.Report)
 	}
 
-	result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
+	result, err := newFileConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -404,7 +524,7 @@ func TestRunInspectAppliesBehaviorIndicatorPolicyFindings(t *testing.T) {
 	withWorkingDirectory(t, workspace)
 
 	var out bytes.Buffer
-	result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &out, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
+	result, err := newFileConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &out, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -453,7 +573,7 @@ func TestRunInspectPyPISdistArtifact(t *testing.T) {
 	defer func() { pypi.BaseURL = oldBase }()
 
 	withWorkingDirectory(t, t.TempDir())
-	result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "pip", "install", "requests"})
+	result, err := newStaticConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}, config.Config{}).Run(context.Background(), []string{"--inspect", "pip", "install", "requests"})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -495,7 +615,7 @@ func TestRunInspectUnsupportedVerifiedArtifactReturnsOperationalError(t *testing
 	t.Setenv("TEMP", tempDirectory)
 	withWorkingDirectory(t, t.TempDir())
 
-	result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
+	result, err := newStaticConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}, config.Config{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
 	if err == nil {
 		t.Fatalf("Run returned nil error")
 	}
@@ -547,7 +667,7 @@ func TestRunInspectSkipsArtifactDownloadWhenMetadataBlocks(t *testing.T) {
 	withWorkingDirectory(t, workspace)
 
 	var out bytes.Buffer
-	result, err := New(server.Client(), &out, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
+	result, err := newFileConfigApp(server.Client(), &out, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -725,4 +845,91 @@ func hasFindingContaining(findings []report.Finding, want string) bool {
 		}
 	}
 	return false
+}
+
+func newStaticConfigApp(client *http.Client, out, errOut io.Writer, cfg config.Config) *App {
+	app := New(client, out, errOut)
+	app.loadConfig = func(string) (config.Config, error) {
+		return cfg, nil
+	}
+	app.configStatus = func(string) configsource.Status {
+		return configsource.Status{
+			ConfigMode:            configsource.ModeFile,
+			AcceptsExternalConfig: true,
+			Valid:                 true,
+			Config:                &cfg,
+		}
+	}
+	app.configMode = func() string {
+		return configsource.ModeFile
+	}
+	app.acceptsExternalConfig = func() bool {
+		return true
+	}
+	app.acceptedConfigInputs = func() string {
+		return config.DefaultPath + " or --config <path>"
+	}
+	return app
+}
+
+func newFileConfigApp(client *http.Client, out, errOut io.Writer) *App {
+	app := New(client, out, errOut)
+	app.loadConfig = func(path string) (config.Config, error) {
+		if strings.TrimSpace(path) == "" {
+			return config.Load(config.DefaultPath)
+		}
+		return config.LoadRequired(path)
+	}
+	app.configStatus = func(path string) configsource.Status {
+		return fileConfigStatusForTest(path)
+	}
+	app.configMode = func() string {
+		return configsource.ModeFile
+	}
+	app.acceptsExternalConfig = func() bool {
+		return true
+	}
+	app.acceptedConfigInputs = func() string {
+		return config.DefaultPath + " or --config <path>"
+	}
+	return app
+}
+
+func fileConfigStatusForTest(path string) configsource.Status {
+	effectivePath := strings.TrimSpace(path)
+	defaultPath := effectivePath == ""
+	if defaultPath {
+		effectivePath = config.DefaultPath
+	}
+	status := configsource.Status{
+		ConfigMode:            configsource.ModeFile,
+		AcceptsExternalConfig: true,
+		ConfigPath:            effectivePath,
+		DefaultPath:           defaultPath,
+	}
+	data, err := os.ReadFile(effectivePath)
+	if os.IsNotExist(err) {
+		status.Exists = false
+		if defaultPath {
+			cfg := config.Config{}
+			status.Valid = true
+			status.Config = &cfg
+		} else {
+			status.Error = "config file not found"
+		}
+		return status
+	}
+	if err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	status.Exists = true
+	cfg, err := config.LoadBytes(data)
+	if err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	status.Valid = true
+	status.Config = &cfg
+	return status
 }

@@ -1,17 +1,17 @@
 # SourceGate Design
 
-SourceGate is an inspection CLI for package-install-shaped commands. It accepts npm and pip install commands with optional exact package versions, fetches public registry metadata, runs deterministic policy checks, optionally downloads and archive-inspects one verified install-target artifact, renders human-readable or JSON output, and exits without installing anything.
+SourceGate is a pre-install security gate for package-install-shaped commands. It accepts npm and pip install commands with optional exact package versions, fetches public registry metadata, runs deterministic policy checks, optionally downloads and archive-inspects one verified install-target artifact, renders human-readable or JSON output, and exits without installing anything in the current release.
 
 ## Runtime Flow
 
 The high-level flow is:
 
 1. `cmd/sourcegate` creates a bounded context and HTTP client.
-2. `internal/cli` parses commands shaped like `sourcegate npm install <package>[@<version>]` or `sourcegate pip install <package>[==<version>]`, with global prefix options such as `--inspect`, `--debug`, `--format`, and PyPI target overrides.
-3. `internal/app` loads `sourcegate.config.json`, selects an ecosystem adapter, fetches metadata for the parsed package spec, runs policy checks, and renders output.
+2. `internal/cli` parses information commands such as `--help`, `--version`, and `--print-config`, plus install-shaped commands like `sourcegate npm install <package>[@<version>]` or `sourcegate pip install <package>[==<version>]`, with global prefix options such as `--mode`, `--config`, `--debug`, `--format`, and PyPI target overrides.
+3. `internal/app` handles information commands before registry work, loads config through `internal/configsource`, selects an ecosystem adapter, fetches metadata for the parsed package spec, runs policy checks, and renders output.
 4. `internal/ecosystem/npm` or `internal/ecosystem/pypi` selects either the requested exact version or the registry latest release and converts registry responses into a shared `report.PackageReport`.
 5. `internal/checks` evaluates configured policy tiers and appends findings to the report.
-6. When `--inspect` is set and metadata policy does not block, `internal/artifact` downloads one selected artifact into a temporary file, enforces limits, and verifies its digest.
+6. When `--mode artifact` is set and metadata policy does not block, `internal/artifact` downloads one selected artifact into a temporary file, enforces limits, and verifies its digest.
 7. `internal/archiveinspect` reads the verified archive without extracting it, records inventory metrics, detects hard archive safety issues, reads bounded package metadata for install/build execution surfaces, reads small file prefixes for native/executable file type signatures, and scans capped text/source files for high-confidence suspicious behavior indicators.
 8. The temporary artifact is deleted before output or error return.
 9. `internal/output` renders either human output or a structured JSON envelope.
@@ -28,6 +28,7 @@ internal/archiveinspect/ Archive inventory and safety inspection
 internal/artifact/       Bounded temporary artifact download and verification
 internal/cli/            Command parsing
 internal/config/         Config schema, loading, and validation
+internal/configsource/   Relaxed file config and strict embedded config source selection
 internal/report/         Shared report, finding, and decision types
 internal/ecosystem/      Shared ecosystem constants and adapter interface
 internal/ecosystem/npm/  npm registry metadata client
@@ -87,9 +88,11 @@ Unversioned requests preserve the original behavior and inspect the registry lat
 
 ## Configuration And Policy Tiers
 
-Configuration lives in `sourcegate.config.json` and is loaded by `internal/config`.
+Configuration is parsed and validated by `internal/config`, then selected by `internal/configsource`.
 
-A missing config file produces a zero policy. A present config is validated as one complete JSON value and must contain every policy key in all three tiers. Companion options are validated within each tier so checks cannot silently depend on a setting configured only at another severity.
+Default builds use relaxed file config: `sourcegate.config.json` from the current working directory unless `--config <path>` is provided. A missing default config file produces a zero policy, but a missing explicit config path is an operational error. Builds created with `go build -tags embedded_config ./cmd/sourcegate` use strict embedded config, reject `--config`, and report the embedded config hash through `--print-config`.
+
+A present file config or embedded config is validated as one complete JSON value and must contain every policy key in all three tiers. Companion options are validated within each tier so checks cannot silently depend on a setting configured only at another severity.
 
 The policy model has three tiers:
 
@@ -97,7 +100,7 @@ The policy model has three tiers:
 - `alert`
 - `block`
 
-`internal/checks` evaluates tiers from strongest to weakest for each check: `block`, then `alert`, then `inform`. If the same check matches multiple tiers, only the strongest matching tier is reported for that check. Archive safety and execution-surface checks run only after successful `--inspect` archive inspection.
+`internal/checks` evaluates tiers from strongest to weakest for each check: `block`, then `alert`, then `inform`. If the same check matches multiple tiers, only the strongest matching tier is reported for that check. Archive safety and execution-surface checks run only after successful artifact-mode archive inspection.
 
 The `block` tier sets the report decision to `BLOCK` and exits with code `30`. SourceGate still does not run or block a real package-manager install.
 
@@ -119,17 +122,17 @@ Current metadata checks are:
 - npm lifecycle script declaration, suspicious commands, history changes, and dormant script additions.
 - PyPI artifact shape, file size jump, dependency change, provenance availability, and release file count changes.
 
-`--inspect` also enables archive safety checks for unsafe archive paths, file-count limits, total uncompressed-size limits, high expansion ratios, install/build execution surfaces, suspicious native/executable file types, and suspicious behavior indicators.
+`--mode artifact` also enables archive safety checks for unsafe archive paths, file-count limits, total uncompressed-size limits, high expansion ratios, install/build execution surfaces, suspicious native/executable file types, and suspicious behavior indicators. `--inspect` remains a deprecated alias for `--mode artifact`.
 
 Individual check packages determine whether a condition matches and provide the finding message. The tier runner assigns the final finding level: `INFORM`, `ALERT`, or `BLOCK`.
 
 ## Artifact Download Inspection
 
-Normal commands remain metadata-only. `--inspect` selects the npm tarball or the highest-priority compatible non-yanked PyPI wheel, falling back to a non-yanked sdist. Metadata `BLOCK` findings skip download and archive inspection.
+Default commands currently run in metadata mode. `--mode artifact` selects the npm tarball or the highest-priority compatible non-yanked PyPI wheel, falling back to a non-yanked sdist. Metadata `BLOCK` findings skip download and archive inspection.
 
 Downloads stream to a mode-`0600` OS temporary file, are limited to 100 MiB, require a trusted SHA-256 or SHA-512 registry digest, and verify any available expected size. Missing or mismatched verification data is an operational error.
 
-After verification, SourceGate reads supported archive metadata for npm `.tgz` tarballs and PyPI `.whl`, `.zip`, `.tar.gz`, and `.tgz` artifacts. It records inventory counts, compressed and uncompressed size metrics, path depth, duplicate paths, nested archive count, bounded install/build execution-surface examples, bounded suspicious native/executable file type examples, and bounded suspicious behavior indicator examples. It emits policy findings for unsafe paths, file-count thresholds, uncompressed-size thresholds, expansion-ratio thresholds, execution surfaces, suspicious file types, and behavior indicators. Unsupported verified archive formats are operational errors in `--inspect` mode.
+After verification, SourceGate reads supported archive metadata for npm `.tgz` tarballs and PyPI `.whl`, `.zip`, `.tar.gz`, and `.tgz` artifacts. It records inventory counts, compressed and uncompressed size metrics, path depth, duplicate paths, nested archive count, bounded install/build execution-surface examples, bounded suspicious native/executable file type examples, and bounded suspicious behavior indicator examples. It emits policy findings for unsafe paths, file-count thresholds, uncompressed-size thresholds, expansion-ratio thresholds, execution surfaces, suspicious file types, and behavior indicators. Unsupported verified archive formats are operational errors in artifact mode.
 
 Archive inspection does not extract files, execute code, invoke package managers, or follow links. Metadata reads are limited to 256 KiB per file and 1 MiB total per artifact, file type magic inspection reads only a small prefix, and behavior indicator scanning reads only likely text/source/script/config files up to 128 KiB per file and 2 MiB total per artifact. Broad source content scanning, deep binary analysis, and broad malware signature matching are deferred.
 
@@ -167,4 +170,4 @@ SourceGate currently does not:
 - Perform runtime malware analysis.
 - Enforce final allow/block decisions beyond reporting findings.
 
-Those boundaries keep the current implementation local, metadata-driven, and safe to run during early development.
+`--mode install` is reserved for SourceGate 1.0 and currently returns an operational error. Those boundaries keep the current implementation local, metadata-driven, and safe to run during early development.

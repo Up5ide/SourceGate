@@ -2,21 +2,21 @@
 
 ## Project Purpose
 
-SourceGate is a Go CLI that inspects package registry metadata before a package install is trusted.
-It accepts install-shaped commands for npm and pip, fetches public registry metadata, evaluates deterministic policy checks, prints human or JSON output, and exits without installing anything.
+SourceGate is a Go CLI and pre-install security gate that inspects package registry metadata before a package install is trusted.
+It accepts install-shaped commands for npm and pip, fetches public registry metadata, evaluates deterministic policy checks, prints human or JSON output, and exits without installing anything in the current release.
 
-Normal commands remain metadata-only. `--inspect` additionally downloads one preferred install-target artifact to a verified temporary file and inspects archive metadata, bounded install/build metadata, native/executable file type signals, and high-confidence suspicious behavior indicators without extraction.
+Default commands currently run in `--mode metadata`. `--mode artifact` additionally downloads one preferred install-target artifact to a verified temporary file and inspects archive metadata, bounded install/build metadata, native/executable file type signals, and high-confidence suspicious behavior indicators without extraction. `--inspect` remains a deprecated alias for `--mode artifact`. `--mode install` is reserved for SourceGate 1.0 and currently returns an operational error.
 SourceGate does not unpack package contents, broadly scan source code, run package-manager installs, or execute lifecycle scripts.
 PyPI install-target provenance inspection may run local `python -m pip debug --verbose` only to discover compatible tags.
 
 ## Runtime Flow
 
 1. `cmd/sourcegate/main.go` creates the app, bounded context, and HTTP client.
-2. `internal/cli` parses commands such as `sourcegate npm install <package>[@<version>]` and `sourcegate pip install <package>[==<version>]`.
-3. `internal/app` loads `sourcegate.config.json`, selects the ecosystem adapter, fetches metadata, runs policy checks, renders output, and returns an exit code.
+2. `internal/cli` parses information commands such as `--help`, `--version`, and `--print-config`, plus install-shaped commands such as `sourcegate npm install <package>[@<version>]` and `sourcegate pip install <package>[==<version>]`.
+3. `internal/app` handles information commands before registry work, loads config through `internal/configsource`, selects the ecosystem adapter, fetches metadata, runs policy checks, renders output, and returns an exit code.
 4. `internal/ecosystem/npm` and `internal/ecosystem/pypi` fetch registry metadata and normalize it into `report.PackageReport`.
 5. `internal/checks` evaluates policy tiers and appends findings.
-6. For `--inspect`, `internal/artifact` downloads and verifies the selected artifact unless metadata policy blocks it.
+6. For `--mode artifact`, `internal/artifact` downloads and verifies the selected artifact unless metadata policy blocks it.
 7. `internal/archiveinspect` reads the verified archive inventory, hard archive safety metadata, bounded install/build execution-surface metadata, small file prefixes for native/executable signatures, and capped text/source files for suspicious behavior indicators without extracting files.
 8. `internal/output` renders human-readable or JSON results.
 
@@ -28,6 +28,7 @@ PyPI install-target provenance inspection may run local `python -m pip debug --v
 - `internal/artifact/`: bounded temporary artifact download and digest verification.
 - `internal/cli/`: command parsing and package spec validation.
 - `internal/config/`: config schema, loading, normalization, and validation.
+- `internal/configsource/`: relaxed file config and strict embedded config source selection.
 - `internal/ecosystem/`: ecosystem adapter interface and shared package spec.
 - `internal/ecosystem/npm/`: npm registry metadata adapter.
 - `internal/ecosystem/pypi/`: PyPI metadata, Integrity API, provenance targeting, and release history adapter.
@@ -37,7 +38,7 @@ PyPI install-target provenance inspection may run local `python -m pip debug --v
 - `internal/output/`: human and JSON output rendering.
 - `internal/versioning/`: npm and PyPI exact-version classification helpers.
 - `docs/`: human-readable design, configuration, attack-vector, and smoke-test documentation.
-- `sourcegate.config.json`: default local policy configuration.
+- `sourcegate.config.json`: default relaxed local policy configuration and source for the embedded config fixture.
 
 ## Policy Model
 
@@ -55,7 +56,7 @@ When adding any new SourceGate config option under `policy`, always add that opt
 A tier may disable the option with a neutral value such as `false`, `0`, `{}`, or `[]`, but the key must still be present in every tier.
 Keep `sourcegate.config.json`, README examples, config structs, validation, docs, and tests aligned.
 
-A missing config file is allowed and produces disabled policy. A present config must be one complete JSON value containing `policy`, all three tiers, and every supported policy key. Companion options are validated within the same tier.
+Default builds use relaxed file config: a missing default config file is allowed and produces disabled policy, while an explicit missing `--config <path>` is an operational error. Builds created with `go build -tags embedded_config ./cmd/sourcegate` use strict embedded config, reject external config paths, and report the embedded config hash through `--print-config`. A present file config or embedded config must be one complete JSON value containing `policy`, all three tiers, and every supported policy key. Companion options are validated within the same tier.
 
 ## Current Checks
 
@@ -82,7 +83,7 @@ PyPI checks:
 - provenance availability
 - release file count changes
 
-`--inspect` archive checks:
+`--mode artifact` archive checks:
 
 - unsafe archive paths, including traversal, absolute paths, Windows drive or UNC paths, NUL bytes, duplicate normalized paths, and escaping symlink or hardlink targets
 - artifact file-count limits
@@ -101,7 +102,7 @@ For PyPI `install-target` provenance, a failed `pip debug` compatibility lookup 
 Default output is human-readable.
 `--format json` emits structured JSON with the evaluated package report.
 `--debug` appends or includes a bounded evaluation trace without enabling disabled checks or changing behavior.
-`--inspect` downloads one preferred install-target artifact, verifies it, inspects supported archive metadata, bounded execution-surface metadata, native/executable file type signals, and bounded suspicious behavior indicators, reports the result, and deletes the temporary file. It never installs the package.
+`--mode artifact` downloads one preferred install-target artifact, verifies it, inspects supported archive metadata, bounded execution-surface metadata, native/executable file type signals, and bounded suspicious behavior indicators, reports the result, and deletes the temporary file. It never installs the package.
 
 Exit codes:
 

@@ -208,6 +208,12 @@ func TestLoadMissingFileReturnsDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestLoadRequiredRejectsMissingFile(t *testing.T) {
+	if _, err := LoadRequired(filepath.Join(t.TempDir(), "missing.json")); err == nil {
+		t.Fatalf("LoadRequired returned nil error")
+	}
+}
+
 func TestLoadAcceptsFalseForIntegerAndMapOptions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sourcegate.config.json")
 	if err := os.WriteFile(path, completeConfigJSON(t, `{

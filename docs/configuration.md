@@ -1,8 +1,13 @@
 # SourceGate Configuration
 
-SourceGate reads `sourcegate.config.json` from the current working directory.
+SourceGate supports two config modes:
 
-A missing configuration file is allowed and means all policy is disabled. When the file exists, it is a strict policy contract: it must contain `policy`, all three policy tiers, and every supported policy key in each tier. Disabled keys still remain present with a neutral value such as `false`, `0`, `{}`, or `[]`.
+- Relaxed file config is the default build. It reads `sourcegate.config.json` from the current working directory, or a custom path passed with `--config <path>`.
+- Strict embedded config is built with `go build -tags embedded_config ./cmd/sourcegate`. It uses the config compiled into the binary and rejects `--config <path>`.
+
+In relaxed file-config mode, a missing default `sourcegate.config.json` is allowed and means all policy is disabled. A missing explicit `--config <path>` is an operational error. When a config file exists, it is a strict policy contract: it must contain `policy`, all three policy tiers, and every supported policy key in each tier. Disabled keys still remain present with a neutral value such as `false`, `0`, `{}`, or `[]`.
+
+Use `sourcegate --print-config` to print JSON config status. In relaxed mode it reports the config path, whether it exists, whether it is valid, and the effective config when valid. In embedded mode it reports the embedded config and its SHA-256 hash. YAML output is not supported in this version.
 
 Configuration is organized under `policy` with three independent tiers:
 
@@ -138,13 +143,13 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 | `pypi_provenance_scope` | string or `false` | Required with `pypi_provenance_required`; accepts `install-target`, `all-artifacts`, or `sdist-only`. |
 | `pypi_include_optional_dependencies` | boolean | Include PyPI optional `extra` dependency names in dependency-change evaluation. |
 | `pypi_release_file_count_change` | boolean | `true` enables PyPI release file count change findings. |
-| `artifact_unsafe_paths` | boolean | `true` enables unsafe archive path findings during `--inspect`. |
+| `artifact_unsafe_paths` | boolean | `true` enables unsafe archive path findings during `--mode artifact`. |
 | `artifact_max_file_count` | integer or `false` | Maximum regular file count in the inspected archive. |
 | `artifact_max_uncompressed_size_mb` | integer or `false` | Maximum total uncompressed archive size in MiB. |
 | `artifact_max_expansion_ratio` | integer or `false` | Maximum archive expansion ratio when ratio evaluation applies. |
-| `artifact_execution_surfaces` | boolean | `true` enables install/build execution-surface findings during `--inspect`. |
-| `artifact_suspicious_file_types` | boolean | `true` enables native/executable file type findings during `--inspect`. |
-| `artifact_behavior_indicators` | boolean | `true` enables suspicious behavior indicator findings during `--inspect`. |
+| `artifact_execution_surfaces` | boolean | `true` enables install/build execution-surface findings during `--mode artifact`. |
+| `artifact_suspicious_file_types` | boolean | `true` enables native/executable file type findings during `--mode artifact`. |
+| `artifact_behavior_indicators` | boolean | `true` enables suspicious behavior indicator findings during `--mode artifact`. |
 | `protected_packages` | map or `false` | Map keyed by ecosystem; `false` disables protected package checks for the tier. |
 | `protected_tokens` | map or `false` | Map keyed by ecosystem; `false` disables protected token checks for the tier. |
 
@@ -158,7 +163,7 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 
 ## npm Lifecycle Checks
 
-These checks use npm registry metadata only and do not execute lifecycle scripts. The separate runtime `--inspect` mode may download and archive-inspect the selected npm tarball after metadata policy evaluation.
+These checks use npm registry metadata only and do not execute lifecycle scripts. The separate artifact mode may download and archive-inspect the selected npm tarball after metadata policy evaluation.
 
 `install_lifecycle_scripts` emits npm-only findings when the selected package metadata declares install-relevant lifecycle scripts such as `preinstall`, `install`, `postinstall`, `prepublish`, `prepare`, `preprepare`, or `postprepare`.
 
@@ -170,7 +175,7 @@ These checks use npm registry metadata only and do not execute lifecycle scripts
 
 ## PyPI Artifact And Provenance Checks
 
-These checks use PyPI metadata, release-file metadata, version-specific metadata, and the PyPI Integrity API when provenance checks are enabled. The separate runtime `--inspect` mode may download and archive-inspect one selected install-target artifact after metadata policy evaluation.
+These checks use PyPI metadata, release-file metadata, version-specific metadata, and the PyPI Integrity API when provenance checks are enabled. The separate artifact mode may download and archive-inspect one selected install-target artifact after metadata policy evaluation.
 
 `pypi_artifact_history_versions` controls how many previous PyPI releases are available to history-dependent checks. Artifact size and file-count checks use the configured historical window. Dependency changes compare only the immediate previous eligible release.
 
@@ -192,9 +197,9 @@ When `install-target` is enabled, SourceGate runs local `<python> -m pip debug -
 
 ## Artifact Archive Safety And Execution Checks
 
-These checks run only with `--inspect`, after the selected artifact is downloaded to a temporary file and its registry digest is verified. SourceGate reads archive metadata without extracting files, executing code, invoking package managers, or following links.
+These checks run only with `--mode artifact`, after the selected artifact is downloaded to a temporary file and its registry digest is verified. SourceGate reads archive metadata without extracting files, executing code, invoking package managers, or following links. `--inspect` remains a deprecated alias for `--mode artifact`.
 
-Supported archive formats are npm `.tgz` tarballs and PyPI `.whl`, `.zip`, `.tar.gz`, and `.tgz` artifacts. Unsupported verified artifact formats are operational errors in `--inspect` mode because archive safety cannot be evaluated.
+Supported archive formats are npm `.tgz` tarballs and PyPI `.whl`, `.zip`, `.tar.gz`, and `.tgz` artifacts. Unsupported verified artifact formats are operational errors in artifact mode because archive safety cannot be evaluated.
 
 `artifact_unsafe_paths` emits findings for path traversal, absolute paths, Windows drive or UNC paths, NUL bytes, duplicate normalized paths, and symlink or hardlink targets that escape the archive root. Symlinks and hardlinks are counted in inventory but are not findings by themselves when their targets stay inside the archive root.
 
@@ -236,14 +241,14 @@ The optional top-level `pypi_runtime` block stores harmless install-target defau
 CLI prefix flags override matching defaults:
 
 ```bash
-sourcegate --python python --target-platform linux_x86_64 --python-version 3.12 --implementation cp --abi cp312 pip install cryptography
+sourcegate --mode artifact --python python --target-platform linux_x86_64 --python-version 3.12 --implementation cp --abi cp312 pip install cryptography
 ```
 
 `--abi` may be repeated. CLI ABI values replace the configured ABI list. SourceGate intentionally does not allow configuration files to select a Python executable because a repository-controlled path would introduce local code execution during inspection.
 
 ## Validation
 
-SourceGate accepts an absent config file as disabled policy. A present config must be one complete JSON value and include `policy`, `inform`, `alert`, `block`, and every supported policy key in every tier. SourceGate rejects partial configs and unknown fields.
+SourceGate accepts an absent default config file in relaxed mode as disabled policy. A present config, an explicit `--config <path>`, and an embedded config must be one complete JSON value and include `policy`, `inform`, `alert`, `block`, and every supported policy key in every tier. SourceGate rejects partial configs and unknown fields.
 
 Numeric threshold values accept non-negative integers or `false`; negative values are rejected:
 
