@@ -25,7 +25,10 @@ func ArtifactShapeEvidence(pkg report.PackageReport, historyVersions int) []stri
 }
 
 func FileSizeEvidence(pkg report.PackageReport, historyVersions int) []string {
-	latestTotal, latestLargest, historicalMedianTotal, historicalMedianLargest := fileSizeStats(pkg, historyVersions)
+	latestTotal, latestLargest, historicalMedianTotal, historicalMedianLargest, known := fileSizeStats(pkg, historyVersions)
+	if !known {
+		return []string{"file-size comparison metadata: unavailable or invalid"}
+	}
 	return []string{
 		fmt.Sprintf("latest total file size: %d bytes", latestTotal),
 		fmt.Sprintf("historical median total file size: %d bytes", historicalMedianTotal),
@@ -50,6 +53,8 @@ func DependencyEvidence(pkg report.PackageReport, historyVersions int, includeOp
 		fmt.Sprintf("removed required dependencies: %s", displaySet(comparison.requiredRemoved)),
 		fmt.Sprintf("added optional dependencies: %s", displaySet(comparison.optionalAdded)),
 		fmt.Sprintf("removed optional dependencies: %s", displaySet(comparison.optionalRemoved)),
+		fmt.Sprintf("required-to-optional dependencies: %s", displaySet(comparison.requiredToOptional)),
+		fmt.Sprintf("optional-to-required dependencies: %s", displaySet(comparison.optionalToRequired)),
 		fmt.Sprintf("optional dependency comparison: %s", enabledLabel(includeOptional)),
 	}
 }
@@ -69,6 +74,9 @@ func ProvenanceEvidence(pkg report.PackageReport) []string {
 	}
 	if summary.UsedFallback {
 		evidence = append(evidence, "target compatibility fallback: "+summary.FallbackReason)
+	}
+	if summary.CompatibilityError != "" {
+		evidence = append(evidence, "target compatibility error: "+summary.CompatibilityError)
 	}
 	for _, scope := range summary.RequestedScopes {
 		evidence = append(evidence, provenanceScopeEvidence(pkg, scope)...)

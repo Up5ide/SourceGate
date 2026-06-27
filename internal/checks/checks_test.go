@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -298,19 +299,11 @@ func TestEvaluateLeavesInspectOnlyWhenDisabled(t *testing.T) {
 
 func TestEvaluateLeavesInspectOnlyWhenFlexibleFalseValuesDisablePolicy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sourcegate.config.json")
-	if err := os.WriteFile(path, []byte(`{
-		"policy": {
-			"alert": {
-				"minimum_days_since_latest_release": false,
-				"dormant_release_threshold_days": false,
-				"install_lifecycle_history_versions": false,
-				"pypi_artifact_history_versions": false,
-				"pypi_file_size_jump_percent": false,
-				"protected_packages": false,
-				"protected_tokens": false
-			}
-		}
-	}`), 0600); err != nil {
+	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{}})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(path, configData, 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -373,8 +366,8 @@ func TestEvaluateWithOptionsCollectsNPMDebugTrace(t *testing.T) {
 	if history.Status != report.DebugTraceMatch || history.Severity != levelAlert {
 		t.Fatalf("history trace = %+v, want ALERT match", history)
 	}
-	if !containsEvidence(history, "absent from 1 compared version(s)") {
-		t.Fatalf("history trace evidence = %+v, want comparison result", history.Evidence)
+	if !containsEvidence(history, "absent from immediate previous version 1.0.0") {
+		t.Fatalf("history trace evidence = %+v, want immediate comparison result", history.Evidence)
 	}
 
 	if got := findTrace(t, pkg.DebugTrace, "pypi_dependency_change").Status; got != report.DebugTraceNotApplicable {
@@ -479,6 +472,67 @@ func TestEvaluateWithOptionsMarksUnreliableHistoryIndeterminate(t *testing.T) {
 	}
 	if len(pkg.Findings) != 1 || !strings.Contains(pkg.Findings[0].Message, "indeterminate") {
 		t.Fatalf("findings = %+v, want indeterminate finding", pkg.Findings)
+	}
+}
+
+func TestEvaluateMarksUnknownImmediateNPMHistoryIndeterminate(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem:        "npm",
+		LifecycleScripts: map[string]string{"install": "node install.js"},
+		LifecycleHistory: []report.VersionLifecycleScripts{{Version: "1.0.0", ScriptsKnown: false}},
+	}
+	cfg := config.Config{Policy: config.PolicyConfig{
+		Alert: config.PolicyTierConfig{InstallLifecycleHistoryVersions: 5},
+	}}
+
+	EvaluateWithOptions(&pkg, cfg, time.Now(), EvaluationOptions{Debug: true})
+
+	trace := findTrace(t, pkg.DebugTrace, "npm_lifecycle_history")
+	if trace.Status != report.DebugTraceIndeterminate || !containsEvidence(trace, "immediate previous") {
+		t.Fatalf("trace = %+v, want immediate-history indeterminate trace", trace)
+	}
+}
+
+func TestEvaluateMarksUnknownImmediatePyPIDependenciesIndeterminate(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem: "PyPI",
+		PyPISelectedRelease: report.PyPIReleaseInfo{
+			DependenciesKnown: true,
+		},
+		PyPIReleaseHistory: []report.PyPIReleaseInfo{{Version: "1.0.0", DependenciesKnown: false}},
+	}
+	cfg := config.Config{Policy: config.PolicyConfig{
+		Alert: config.PolicyTierConfig{PyPIArtifactHistoryVersions: 5, PyPIDependencyChange: true},
+	}}
+
+	EvaluateWithOptions(&pkg, cfg, time.Now(), EvaluationOptions{Debug: true})
+
+	trace := findTrace(t, pkg.DebugTrace, "pypi_dependency_change")
+	if trace.Status != report.DebugTraceIndeterminate || !containsEvidence(trace, "immediate previous") {
+		t.Fatalf("trace = %+v, want immediate dependency indeterminate trace", trace)
+	}
+}
+
+func TestEvaluateInstallTargetCompatibilityFailureKeepsKnownProvenanceFindings(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem: "PyPI",
+		PyPISelectedRelease: report.PyPIReleaseInfo{Files: []report.PyPIReleaseFile{{
+			Filename:          "pkg-1.0.0.tar.gz",
+			PackageType:       "sdist",
+			ProvenanceChecked: true,
+			ProvenanceScopes:  []string{"install-target"},
+		}}},
+		PyPIProvenance: report.PyPIProvenanceSummary{CompatibilityError: "pip debug failed"},
+	}
+	cfg := config.Config{Policy: config.PolicyConfig{
+		Alert: config.PolicyTierConfig{PyPIProvenanceRequired: true, PyPIProvenanceScope: "install-target"},
+	}}
+
+	EvaluateWithOptions(&pkg, cfg, time.Now(), EvaluationOptions{Debug: true})
+
+	trace := findTrace(t, pkg.DebugTrace, "pypi_provenance")
+	if trace.Status != report.DebugTraceIndeterminate || len(pkg.Findings) != 2 {
+		t.Fatalf("trace = %+v findings = %+v, want known missing provenance plus indeterminate finding", trace, pkg.Findings)
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 	"github.com/sourcegate/sourcegate/internal/version"
 )
 
-const JSONSchemaVersion = "1"
+const JSONSchemaVersion = "2"
 
 type JSONReport struct {
 	SchemaVersion     string               `json:"schema_version"`

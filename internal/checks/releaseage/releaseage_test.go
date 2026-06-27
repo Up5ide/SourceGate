@@ -1,6 +1,7 @@
 package releaseage
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -14,6 +15,16 @@ func TestCheckBlocksFreshLatestRelease(t *testing.T) {
 
 	if len(findings) != 1 {
 		t.Fatalf("unexpected findings: %+v", findings)
+	}
+}
+
+func TestCheckHandlesVeryLargeMinimumWithoutOverflow(t *testing.T) {
+	findings := Check(report.PackageReport{
+		SelectedPublishedAt: "2026-05-26T12:00:00Z",
+	}, math.MaxInt, time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC))
+
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want fresh release finding", findings)
 	}
 }
 

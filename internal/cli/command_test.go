@@ -97,6 +97,16 @@ func TestParseInstallCommandDebug(t *testing.T) {
 	}
 }
 
+func TestParseInstallCommandInspect(t *testing.T) {
+	req, err := ParseInstallCommand([]string{"--inspect", "--debug", "npm", "install", "lodash"})
+	if err != nil {
+		t.Fatalf("ParseInstallCommand returned error: %v", err)
+	}
+	if !req.Inspect || !req.Debug {
+		t.Fatalf("request = %+v, want inspect and debug", req)
+	}
+}
+
 func TestParseInstallCommandJSONFormat(t *testing.T) {
 	req, err := ParseInstallCommand([]string{"--format", "json", "npm", "install", "lodash"})
 	if err != nil {
@@ -145,6 +155,7 @@ func TestParseInstallCommandRejectsUnsupportedShapes(t *testing.T) {
 		{"pip", "install", "requests[socks]==2.31.0"},
 		{"pip", "install", "requests==2.31.0,==2.32.0"},
 		{"--debug", "--debug", "npm", "install", "lodash"},
+		{"--inspect", "--inspect", "npm", "install", "lodash"},
 		{"--format", "xml", "npm", "install", "lodash"},
 		{"--format", "json", "--format", "human", "npm", "install", "lodash"},
 		{"--format", "npm", "install", "lodash"},

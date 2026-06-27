@@ -2,6 +2,7 @@ package pypiartifacts
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -42,6 +43,23 @@ func TestCheckArtifactShapeChangeReportsNewWheelPlatformTag(t *testing.T) {
 
 	if !hasMessageContaining(findings, "new wheel platform tag") {
 		t.Fatalf("findings = %+v, want new wheel platform finding", findings)
+	}
+}
+
+func TestCheckArtifactShapeChangeDoesNotMislabelPythonABIChangeAsPlatformChange(t *testing.T) {
+	findings := CheckArtifactShapeChange(report.PackageReport{
+		Ecosystem: "PyPI",
+		PyPISelectedRelease: report.PyPIReleaseInfo{
+			Files: []report.PyPIReleaseFile{{Filename: "pkg-2.0.0-cp312-cp312-win_amd64.whl", PackageType: "bdist_wheel"}},
+		},
+		PyPIReleaseHistory: []report.PyPIReleaseInfo{{
+			Version: "1.0.0",
+			Files:   []report.PyPIReleaseFile{{Filename: "pkg-1.0.0-cp311-cp311-win_amd64.whl", PackageType: "bdist_wheel"}},
+		}},
+	}, 5)
+
+	if hasMessageContaining(findings, "new wheel platform") {
+		t.Fatalf("findings = %+v, want no platform finding for Python/ABI-only change", findings)
 	}
 }
 
@@ -89,6 +107,29 @@ func TestCheckFileSizeJumpUsesIncreaseOverBaseline(t *testing.T) {
 	pkg.PyPISelectedRelease.Files[0].Size = 4000
 	if findings := CheckFileSizeJump(pkg, 5, 300); len(findings) == 0 {
 		t.Fatalf("findings = %+v, want match at 300%% increase", findings)
+	}
+}
+
+func TestCheckFileSizeJumpHandlesLargeThresholdWithoutOverflow(t *testing.T) {
+	findings := CheckFileSizeJump(report.PackageReport{
+		Ecosystem: "PyPI",
+		PyPISelectedRelease: report.PyPIReleaseInfo{
+			Files: []report.PyPIReleaseFile{{Filename: "pkg-2.0.0.tar.gz", Size: math.MaxInt64}},
+		},
+		PyPIReleaseHistory: []report.PyPIReleaseInfo{{
+			Version: "1.0.0",
+			Files:   []report.PyPIReleaseFile{{Filename: "pkg-1.0.0.tar.gz", Size: math.MaxInt64 / 2}},
+		}},
+	}, 5, math.MaxInt)
+
+	if len(findings) != 0 {
+		t.Fatalf("findings = %+v, want no overflow match", findings)
+	}
+}
+
+func TestMedianInt64DoesNotOverflow(t *testing.T) {
+	if got := medianInt64([]int64{math.MaxInt64 - 2, math.MaxInt64}); got != math.MaxInt64-1 {
+		t.Fatalf("medianInt64() = %d, want %d", got, int64(math.MaxInt64-1))
 	}
 }
 
@@ -148,6 +189,98 @@ func TestCheckDependencyChangeIncludesOptionalDependenciesOnlyWhenEnabled(t *tes
 	}
 }
 
+func TestCheckDependencyChangeDoesNotSkipUnknownImmediateRelease(t *testing.T) {
+	findings := CheckDependencyChange(report.PackageReport{
+		Ecosystem: "PyPI",
+		PyPISelectedRelease: report.PyPIReleaseInfo{
+			DependenciesKnown: true,
+			Dependencies:      []string{"new"},
+		},
+		PyPIReleaseHistory: []report.PyPIReleaseInfo{
+			{Version: "1.1.0", DependenciesKnown: false},
+			{Version: "1.0.0", DependenciesKnown: true, Dependencies: []string{"old"}},
+		},
+	}, 5, false)
+
+	if !hasMessageContaining(findings, "immediate previous") || hasMessageContaining(findings, "adds declared") {
+		t.Fatalf("findings = %+v, want immediate previous metadata finding only", findings)
+	}
+}
+
+func TestCheckDependencyChangeReportsRequiredOptionalTransitions(t *testing.T) {
+	findings := CheckDependencyChange(report.PackageReport{
+		Ecosystem: "PyPI",
+		PyPISelectedRelease: report.PyPIReleaseInfo{
+			DependenciesKnown:    true,
+			OptionalDependencies: []string{"requests"},
+		},
+		PyPIReleaseHistory: []report.PyPIReleaseInfo{{
+			Version:           "1.0.0",
+			DependenciesKnown: true,
+			Dependencies:      []string{"requests"},
+		}},
+	}, 5, true)
+
+	if !hasMessageContaining(findings, "required to optional: requests") {
+		t.Fatalf("findings = %+v, want dependency category transition", findings)
+	}
+}
+
+func TestHistoryChecksReportUnavailableImmediateMetadata(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem:           "PyPI",
+		PyPISelectedRelease: report.PyPIReleaseInfo{Files: []report.PyPIReleaseFile{{Filename: "pkg-2.0.0.tar.gz", PackageType: "sdist", Size: 100}}},
+		PyPIReleaseHistory:  []report.PyPIReleaseInfo{{Version: "1.0.0"}},
+	}
+
+	for name, reason := range map[string]string{
+		"shape":      ArtifactShapeIndeterminateReason(pkg, 5),
+		"size":       FileSizeIndeterminateReason(pkg, 5),
+		"file count": ReleaseFileCountIndeterminateReason(pkg, 5),
+	} {
+		if !strings.Contains(reason, "immediate previous") {
+			t.Fatalf("%s reason = %q, want immediate previous metadata reason", name, reason)
+		}
+	}
+}
+
+func TestHistoryChecksReportUnavailableMetadataAnywhereInWindow(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem: "PyPI",
+		PyPISelectedRelease: report.PyPIReleaseInfo{Files: []report.PyPIReleaseFile{{
+			Filename: "pkg-3.0.0.tar.gz",
+			Size:     100,
+		}}},
+		PyPIReleaseHistory: []report.PyPIReleaseInfo{
+			{Version: "2.0.0", Files: []report.PyPIReleaseFile{{Filename: "pkg-2.0.0.tar.gz", Size: 100}}},
+			{Version: "1.0.0"},
+		},
+	}
+
+	for name, reason := range map[string]string{
+		"shape":      ArtifactShapeIndeterminateReason(pkg, 5),
+		"size":       FileSizeIndeterminateReason(pkg, 5),
+		"file count": ReleaseFileCountIndeterminateReason(pkg, 5),
+	} {
+		if !strings.Contains(reason, "historical version 1.0.0") {
+			t.Fatalf("%s reason = %q, want missing historical version metadata reason", name, reason)
+		}
+	}
+}
+
+func TestProvenanceIndeterminateReasonOnlyAffectsInstallTarget(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem:      "PyPI",
+		PyPIProvenance: report.PyPIProvenanceSummary{CompatibilityError: "pip debug failed"},
+	}
+	if reason := ProvenanceIndeterminateReason(pkg, "install-target"); !strings.Contains(reason, "pip debug failed") {
+		t.Fatalf("reason = %q, want install-target compatibility error", reason)
+	}
+	if reason := ProvenanceIndeterminateReason(pkg, "all-artifacts"); reason != "" {
+		t.Fatalf("reason = %q, want all-artifacts unaffected", reason)
+	}
+}
+
 func TestProvenanceEvidenceBoundsMissingFiles(t *testing.T) {
 	var files []report.PyPIReleaseFile
 	for i := range 7 {
@@ -159,7 +292,7 @@ func TestProvenanceEvidenceBoundsMissingFiles(t *testing.T) {
 	}
 	evidence := ProvenanceEvidence(report.PackageReport{
 		PyPISelectedRelease: report.PyPIReleaseInfo{Files: files},
-		PyPIProvenance:    report.PyPIProvenanceSummary{RequestedScopes: []string{"install-target"}},
+		PyPIProvenance:      report.PyPIProvenanceSummary{RequestedScopes: []string{"install-target"}},
 	})
 
 	if !strings.Contains(strings.Join(evidence, "\n"), "and 2 more") {

@@ -92,3 +92,23 @@ func TestRenderHumanIncludesNonPolicyWarnings(t *testing.T) {
 		t.Fatalf("output missing unchanged decision:\n%s", output)
 	}
 }
+
+func TestRenderHumanIncludesArtifactDownloadSummary(t *testing.T) {
+	var buf bytes.Buffer
+	RenderHuman(&buf, report.PackageReport{
+		Name: "pkg",
+		ArtifactDownload: &report.ArtifactDownloadSummary{
+			Status:          report.ArtifactDownloadStatusVerified,
+			Filename:        "pkg.tgz",
+			PackageType:     "npm-tarball",
+			DownloadedSize:  42,
+			DigestAlgorithm: "sha512",
+			DigestVerified:  true,
+		},
+	})
+	for _, want := range []string{"Artifact Download:", "Status: DOWNLOADED_VERIFIED", "Filename: pkg.tgz", "Digest: sha512 verified=true"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, buf.String())
+		}
+	}
+}

@@ -69,3 +69,17 @@ func TestRenderJSONIncludesDebugTraceWhenCollected(t *testing.T) {
 		t.Fatalf("JSON missing debug trace:\n%s", buf.String())
 	}
 }
+
+func TestRenderJSONIncludesArtifactSummaryButNotInternalCandidate(t *testing.T) {
+	var buf bytes.Buffer
+	err := RenderJSON(&buf, report.PackageReport{
+		ArtifactCandidate: report.ArtifactCandidate{URL: "https://secret.example/artifact"},
+		ArtifactDownload:  &report.ArtifactDownloadSummary{Status: report.ArtifactDownloadStatusSkippedBlocked},
+	})
+	if err != nil {
+		t.Fatalf("RenderJSON returned error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "\"artifact_download\"") || strings.Contains(buf.String(), "secret.example") || strings.Contains(buf.String(), "artifact_candidate") {
+		t.Fatalf("JSON artifact fields incorrect:\n%s", buf.String())
+	}
+}

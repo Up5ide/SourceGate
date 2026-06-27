@@ -74,19 +74,21 @@ func CheckHistoryChanges(pkg report.PackageReport, historyVersions int) []report
 
 	var findings []report.Finding
 	for _, name := range installScriptNames(pkg.LifecycleScripts) {
-		result := scriptHistory(pkg, name, historyVersions)
+		result := compareImmediateScript(pkg, name, historyVersions)
 		switch {
-		case result.found && normalizeCommand(result.previousCommand) != normalizeCommand(pkg.LifecycleScripts[name]):
+		case !result.hasPrevious || !result.previousKnown:
+			continue
+		case result.previousHasScript && normalizeCommand(result.previousCommand) != normalizeCommand(pkg.LifecycleScripts[name]):
 			findings = append(findings, report.Finding{
-				Message: fmt.Sprintf("latest npm version changes lifecycle script %q from version %s", name, result.previousVersion),
+				Message: fmt.Sprintf("selected npm version changes lifecycle script %q from version %s", name, result.previousVersion),
 			})
-		case !result.found && result.compared > 0 && !result.unknown:
+		case !result.previousHasScript && result.olderHasScript:
 			findings = append(findings, report.Finding{
-				Message: fmt.Sprintf("latest npm version adds lifecycle script %q not present in previous %d version(s)", name, result.compared),
+				Message: fmt.Sprintf("selected npm version reintroduces lifecycle script %q removed after version %s", name, result.olderVersion),
 			})
-		case !result.found && result.unknown:
+		case !result.previousHasScript:
 			findings = append(findings, report.Finding{
-				Message: fmt.Sprintf("npm lifecycle script history for %q is incomplete because prior version metadata is missing scripts", name),
+				Message: fmt.Sprintf("selected npm version adds lifecycle script %q not present in previous version %s", name, result.previousVersion),
 			})
 		}
 	}
@@ -105,50 +107,88 @@ func CheckDormantAdded(pkg report.PackageReport, historyVersions int, thresholdD
 
 	var findings []report.Finding
 	for _, name := range installScriptNames(pkg.LifecycleScripts) {
-		result := scriptHistory(pkg, name, historyVersions)
-		if result.found || result.compared == 0 || result.unknown {
+		result := compareImmediateScript(pkg, name, historyVersions)
+		if !result.hasPrevious || !result.previousKnown || result.previousHasScript {
 			continue
+		}
+		action := "adds"
+		context := ""
+		if result.olderHasScript {
+			action = "reintroduces"
+			context = fmt.Sprintf(" previously present in version %s", result.olderVersion)
 		}
 		findings = append(findings, report.Finding{
 			Message: fmt.Sprintf(
-				"latest npm version adds lifecycle script %q after %d day(s) of package inactivity",
+				"selected npm version %s lifecycle script %q after %d day(s) of package inactivity%s",
+				action,
 				name,
 				inactivityDays,
+				context,
 			),
 		})
 	}
 	return findings
 }
 
-type historyResult struct {
-	found           bool
-	unknown         bool
-	compared        int
-	previousVersion string
-	previousCommand string
+type immediateScriptComparison struct {
+	hasPrevious       bool
+	previousKnown     bool
+	previousHasScript bool
+	previousVersion   string
+	previousCommand   string
+	olderHasScript    bool
+	olderVersion      string
 }
 
-func scriptHistory(pkg report.PackageReport, scriptName string, historyVersions int) historyResult {
-	result := historyResult{}
-	for _, version := range pkg.LifecycleHistory {
-		if result.compared >= historyVersions {
-			break
-		}
-		result.compared++
-		if !version.ScriptsKnown {
-			result.unknown = true
-			continue
-		}
-		command, ok := version.Scripts[scriptName]
-		if !ok {
-			continue
-		}
-		result.found = true
-		result.previousVersion = version.Version
-		result.previousCommand = command
+func compareImmediateScript(pkg report.PackageReport, scriptName string, historyVersions int) immediateScriptComparison {
+	result := immediateScriptComparison{}
+	history := pkg.LifecycleHistory
+	if len(history) > historyVersions {
+		history = history[:historyVersions]
+	}
+	if len(history) == 0 {
 		return result
 	}
+
+	previous := history[0]
+	result.hasPrevious = true
+	result.previousKnown = previous.ScriptsKnown
+	result.previousVersion = previous.Version
+	if !previous.ScriptsKnown {
+		return result
+	}
+	result.previousCommand, result.previousHasScript = previous.Scripts[scriptName]
+	if result.previousHasScript {
+		return result
+	}
+	for _, version := range history[1:] {
+		if !version.ScriptsKnown {
+			continue
+		}
+		if _, ok := version.Scripts[scriptName]; ok {
+			result.olderHasScript = true
+			result.olderVersion = version.Version
+			return result
+		}
+	}
 	return result
+}
+
+func HistoryIndeterminateReason(pkg report.PackageReport, historyVersions int) string {
+	if !isNPM(pkg) || historyVersions <= 0 || len(installScriptNames(pkg.LifecycleScripts)) == 0 || len(pkg.LifecycleHistory) == 0 {
+		return ""
+	}
+	if !pkg.LifecycleHistory[0].ScriptsKnown {
+		return "immediate previous npm release metadata is missing lifecycle scripts"
+	}
+	return ""
+}
+
+func DormantAddedIndeterminateReason(pkg report.PackageReport, historyVersions int, thresholdDays int) string {
+	if _, dormant := dormantReleaseGap(pkg, thresholdDays); !dormant {
+		return ""
+	}
+	return HistoryIndeterminateReason(pkg, historyVersions)
 }
 
 func installScriptNames(scripts map[string]string) []string {
@@ -255,11 +295,11 @@ func dormantReleaseGap(pkg report.PackageReport, thresholdDays int) (int, bool) 
 	}
 
 	inactivity := selectedPublishedAt.UTC().Sub(previousPublishedAt.UTC())
-	threshold := time.Duration(thresholdDays) * 24 * time.Hour
-	if inactivity < threshold {
+	inactivityDays := int64(inactivity / (24 * time.Hour))
+	if inactivity < 0 || inactivityDays < int64(thresholdDays) {
 		return 0, false
 	}
-	return int(inactivity.Hours() / 24), true
+	return int(inactivityDays), true
 }
 
 func parseRegistryTime(value string) (time.Time, error) {

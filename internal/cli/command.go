@@ -16,6 +16,7 @@ type InstallRequest struct {
 	Command      string
 	Package      ecosystem.PackageSpec
 	Debug        bool
+	Inspect      bool
 	OutputFormat string
 	PyPIRuntime  PyPIRuntimeOptions
 }
@@ -50,6 +51,8 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 		switch option {
 		case "--debug":
 			req.Debug = true
+		case "--inspect":
+			req.Inspect = true
 		case "--format":
 			value, remaining, err := optionValue(option, args)
 			if err != nil {

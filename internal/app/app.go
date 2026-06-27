@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/sourcegate/sourcegate/internal/artifact"
 	"github.com/sourcegate/sourcegate/internal/checks"
 	"github.com/sourcegate/sourcegate/internal/cli"
 	"github.com/sourcegate/sourcegate/internal/config"
@@ -70,6 +71,17 @@ func (a *App) Run(ctx context.Context, args []string) (RunResult, error) {
 		Debug: req.Debug,
 	})
 	exitCode := ExitCodeForReport(pkg)
+	if req.Inspect {
+		if pkg.Decision == report.DecisionBlock {
+			pkg.ArtifactDownload = &report.ArtifactDownloadSummary{Status: report.ArtifactDownloadStatusSkippedBlocked}
+		} else {
+			summary, err := artifact.DownloadAndVerify(ctx, a.client, pkg.ArtifactCandidate, nil)
+			if err != nil {
+				return RunResult{Report: pkg, ExitCode: ExitOperationalError}, err
+			}
+			pkg.ArtifactDownload = &summary
+		}
+	}
 	switch req.OutputFormat {
 	case cli.OutputFormatJSON:
 		if err := output.RenderJSON(a.out, pkg); err != nil {
@@ -105,16 +117,28 @@ func (a *App) adapterFor(req cli.InstallRequest, cfg config.Config) (ecosystem.A
 	case ecosystem.NPM:
 		return npm.NewWithOptions(a.client, npm.Options{
 			HistoryVersions: maxNPMHistoryVersions(cfg.Policy),
+			SelectArtifact:  req.Inspect,
 		}), nil
 	case ecosystem.PyPI:
 		return pypi.NewWithOptions(a.client, pypi.Options{
-			HistoryVersions:  maxPyPIArtifactHistoryVersions(cfg.Policy),
-			ProvenanceScopes: pypiProvenanceScopes(cfg.Policy),
-			Target:           effectivePyPITarget(cfg.PyPIRuntime, req.PyPIRuntime),
+			HistoryVersions:   maxPyPIArtifactHistoryVersions(cfg.Policy),
+			FetchDependencies: pypiDependencyHistoryEnabled(cfg.Policy),
+			SelectArtifact:    req.Inspect,
+			ProvenanceScopes:  pypiProvenanceScopes(cfg.Policy),
+			Target:            effectivePyPITarget(cfg.PyPIRuntime, req.PyPIRuntime),
 		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported ecosystem: %s", req.Ecosystem)
 	}
+}
+
+func pypiDependencyHistoryEnabled(policy config.PolicyConfig) bool {
+	for _, tier := range []config.PolicyTierConfig{policy.Inform, policy.Alert, policy.Block} {
+		if tier.PyPIDependencyChange {
+			return true
+		}
+	}
+	return false
 }
 
 func maxNPMHistoryVersions(policy config.PolicyConfig) int {
@@ -178,7 +202,7 @@ func effectivePyPITarget(runtime config.PyPIRuntimeConfig, overrides cli.PyPIRun
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  sourcegate [--debug] [--format human|json] npm install <package>[@<version>]")
-	fmt.Fprintln(w, "  sourcegate [--debug] [--format human|json] pip install <package>[==<version>]")
-	fmt.Fprintln(w, "  sourcegate [--debug] [--format human|json] [--python <executable>] [--target-platform <platform>] [--python-version <version>] [--implementation <name>] [--abi <abi>] pip install <package>[==<version>]")
+	fmt.Fprintln(w, "  sourcegate [--inspect] [--debug] [--format human|json] npm install <package>[@<version>]")
+	fmt.Fprintln(w, "  sourcegate [--inspect] [--debug] [--format human|json] pip install <package>[==<version>]")
+	fmt.Fprintln(w, "  sourcegate [--inspect] [--debug] [--format human|json] [--python <executable>] [--target-platform <platform>] [--python-version <version>] [--implementation <name>] [--abi <abi>] pip install <package>[==<version>]")
 }

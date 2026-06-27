@@ -2,6 +2,8 @@
 
 SourceGate reads `sourcegate.config.json` from the current working directory.
 
+A missing configuration file is allowed and means all policy is disabled. When the file exists, it is a strict policy contract: it must contain `policy`, all three policy tiers, and every supported policy key in each tier. Disabled keys still remain present with a neutral value such as `false`, `0`, `{}`, or `[]`.
+
 Configuration is organized under `policy` with three independent tiers:
 
 - `inform`: low-noise visibility.
@@ -10,7 +12,7 @@ Configuration is organized under `policy` with three independent tiers:
 
 SourceGate evaluates policy tiers from strongest to weakest for each check: `block`, then `alert`, then `inform`. If the same check matches multiple tiers, only the strongest matching tier is reported.
 
-When adding a new policy option, add it to all three tiers. A tier can disable any option with literal `false`, and the key should still be present in `inform`, `alert`, and `block`.
+When adding a new policy option, add it to all three tiers. A tier can disable any option with literal `false`, and the key must still be present in `inform`, `alert`, and `block`.
 
 For non-boolean options, `false` is normalized to that option's neutral value when SourceGate loads the config:
 
@@ -104,7 +106,7 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 | `dormant_release_threshold_days` | integer or `false` | Number of inactive days that makes a selected release count as dormant. |
 | `alert_on_first_release` | boolean | `true` enables first-release findings; `false` disables them. |
 | `install_lifecycle_scripts` | boolean | `true` enables npm declared lifecycle script findings. |
-| `install_lifecycle_history_versions` | integer or `false` | Number of previous npm versions to compare; `false` disables history comparison. |
+| `install_lifecycle_history_versions` | integer or `false` | Number of previous npm versions available for immediate-release comparison and reintroduction context; `false` disables history comparison. |
 | `suspicious_install_script_commands` | boolean | `true` enables suspicious npm script command pattern findings. |
 | `install_script_added_after_dormancy` | boolean | `true` enables dormant-release npm lifecycle addition findings. |
 | `pypi_artifact_history_versions` | integer or `false` | Number of previous PyPI releases to compare; `false` disables history-dependent PyPI checks. |
@@ -128,27 +130,27 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 
 ## npm Lifecycle Checks
 
-These checks use npm registry metadata only. SourceGate does not download archives and does not execute lifecycle scripts.
+These checks use npm registry metadata only and do not execute lifecycle scripts. The separate runtime `--inspect` mode may download the selected npm tarball after metadata policy evaluation.
 
 `install_lifecycle_scripts` emits npm-only findings when the selected package metadata declares install-relevant lifecycle scripts such as `preinstall`, `install`, `postinstall`, `prepublish`, `prepare`, `preprepare`, or `postprepare`.
 
-`install_lifecycle_history_versions` controls how many previous npm versions are compared when detecting newly added or changed lifecycle scripts.
+`install_lifecycle_history_versions` controls how much previous npm metadata is available. Added and changed scripts are determined against the immediate previous eligible release. Older releases are used only to label a script as reintroduced instead of newly added. If the immediate previous release exists but its scripts metadata is unavailable, the check is indeterminate.
 
 `suspicious_install_script_commands` emits npm-only findings when declared lifecycle script commands contain suspicious metadata-visible patterns such as direct URLs, network download commands, shell or command interpreters, native build tooling, package-manager invocation, or permission-changing commands.
 
-`install_script_added_after_dormancy` emits npm-only findings when the selected release adds a lifecycle script after the same tier's configured `dormant_release_threshold_days` period.
+`install_script_added_after_dormancy` emits npm-only findings when the selected release adds or reintroduces a lifecycle script after the same tier's configured `dormant_release_threshold_days` period. The same tier must enable positive `install_lifecycle_history_versions` and `dormant_release_threshold_days` values.
 
 ## PyPI Artifact And Provenance Checks
 
-These checks use PyPI metadata, release-file metadata, version-specific metadata, and the PyPI Integrity API when provenance checks are enabled. SourceGate still does not download package archives.
+These checks use PyPI metadata, release-file metadata, version-specific metadata, and the PyPI Integrity API when provenance checks are enabled. The separate runtime `--inspect` mode may download one selected install-target artifact after metadata policy evaluation.
 
-`pypi_artifact_history_versions` controls how many previous PyPI releases are compared for artifact and dependency metadata checks.
+`pypi_artifact_history_versions` controls how many previous PyPI releases are available to history-dependent checks. Artifact size and file-count checks use the configured historical window. Dependency changes compare only the immediate previous eligible release.
 
 `pypi_artifact_shape_change` emits PyPI-only findings when the selected release changes artifact package types, removes wheels, becomes source-only, adds or removes sdists, or introduces new wheel platform tags.
 
 `pypi_file_size_jump_percent` emits PyPI-only findings when the selected release total size or largest file size increases by the configured percentage over the historical median. For example, `300` matches at four times the historical median.
 
-`pypi_dependency_change` emits PyPI-only findings when release metadata shows added or removed declared dependency names. Required dependencies are compared by default. Set `pypi_include_optional_dependencies` to `true` in the same tier to include optional `extra` dependencies. If dependency metadata is unavailable or dynamic, SourceGate reports that the change cannot be confirmed.
+`pypi_dependency_change` emits PyPI-only findings when the selected release adds, removes, or changes the required/optional category of declared dependency names compared with the immediate previous eligible release. Required dependencies are compared by default. Set `pypi_include_optional_dependencies` to `true` in the same tier to include optional `extra` dependencies. A null or absent `requires_dist` value is treated as a known empty dependency list unless `Requires-Dist` is declared dynamic. If selected or immediate-previous dependency metadata is dynamic or otherwise unavailable, SourceGate marks the check indeterminate.
 
 `pypi_provenance_required` emits PyPI-only findings when the PyPI Integrity API reports missing provenance for scoped selected-release files or provenance availability cannot be confirmed. Configure the same tier's `pypi_provenance_scope` as:
 
@@ -156,7 +158,7 @@ These checks use PyPI metadata, release-file metadata, version-specific metadata
 - `all-artifacts`: every selected-release artifact.
 - `sdist-only`: source distributions only.
 
-When `install-target` is enabled, SourceGate runs local `<python> -m pip debug --verbose` to resolve Python compatibility tags. It does not install packages. If tag inspection fails, SourceGate prints a non-policy warning and falls back to explicit platform filtering when configured or SourceGate host OS/architecture filtering otherwise. The fallback includes universal wheels and source distributions.
+When `install-target` is enabled, SourceGate runs local `<python> -m pip debug --verbose` to resolve Python compatibility tags. It does not install packages. If tag inspection fails, SourceGate prints a non-policy warning, checks source distributions whose scope is still known, and marks compatible-wheel provenance evaluation indeterminate. It does not guess wheel compatibility from an explicit platform or the SourceGate host.
 
 `pypi_release_file_count_change` emits PyPI-only findings when the selected release file count differs from the historical median.
 
@@ -191,7 +193,7 @@ sourcegate --python python --target-platform linux_x86_64 --python-version 3.12 
 
 ## Validation
 
-SourceGate rejects unknown config fields.
+SourceGate accepts an absent config file as disabled policy. A present config must be one complete JSON value and include `policy`, `inform`, `alert`, `block`, and every supported policy key in every tier. SourceGate rejects partial configs and unknown fields.
 
 Numeric threshold values accept non-negative integers or `false`; negative values are rejected:
 
@@ -204,3 +206,10 @@ Numeric threshold values accept non-negative integers or `false`; negative value
 `protected_packages` and `protected_tokens` only accept `npm` and `pypi` ecosystem keys, and entries cannot be empty strings.
 
 Each tier must set `pypi_provenance_scope` to `false` when `pypi_provenance_required` is `false`. When provenance is required, the tier must configure one supported scope.
+
+Companion settings are validated within the same tier:
+
+- `install_script_added_after_dormancy` requires positive `install_lifecycle_history_versions` and `dormant_release_threshold_days`.
+- Any history-dependent PyPI check requires positive `pypi_artifact_history_versions`.
+- Positive `pypi_artifact_history_versions` requires at least one history-dependent PyPI check.
+- `pypi_include_optional_dependencies` requires `pypi_dependency_change`.

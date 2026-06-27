@@ -46,6 +46,16 @@ func RenderHuman(w io.Writer, pkg report.PackageReport) {
 			fmt.Fprintf(w, "  - [%s] %s\n", finding.Severity, finding.Message)
 		}
 	}
+	if pkg.ArtifactDownload != nil {
+		fmt.Fprintln(w, "Artifact Download:")
+		fmt.Fprintf(w, "  Status: %s\n", pkg.ArtifactDownload.Status)
+		if pkg.ArtifactDownload.Filename != "" {
+			fmt.Fprintf(w, "  Filename: %s\n", pkg.ArtifactDownload.Filename)
+			fmt.Fprintf(w, "  Package Type: %s\n", valueOrUnknown(pkg.ArtifactDownload.PackageType))
+			fmt.Fprintf(w, "  Downloaded Size: %d bytes\n", pkg.ArtifactDownload.DownloadedSize)
+			fmt.Fprintf(w, "  Digest: %s verified=%t\n", valueOrUnknown(pkg.ArtifactDownload.DigestAlgorithm), pkg.ArtifactDownload.DigestVerified)
+		}
+	}
 
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Decision: %s\n", decisionOrInspectOnly(pkg.Decision))

@@ -16,8 +16,8 @@ func Check(pkg report.PackageReport, minDays int, now time.Time) []report.Findin
 	}
 
 	age := now.UTC().Sub(selectedPublishedAt.UTC())
-	requiredAge := time.Duration(minDays) * 24 * time.Hour
-	if age < requiredAge {
+	ageDays := int64(age / (24 * time.Hour))
+	if age < 0 || int64(minDays) > ageDays {
 		return []report.Finding{{
 			Message: fmt.Sprintf(
 				"selected release was published %s ago, below configured minimum of %d day(s)",

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -25,10 +24,12 @@ var BaseURL = "https://pypi.org/pypi"
 var IntegrityBaseURL = "https://pypi.org/integrity"
 
 type Options struct {
-	HistoryVersions  int
-	ProvenanceScopes []string
-	Target           TargetOptions
-	RunCommand       CommandRunner
+	HistoryVersions   int
+	FetchDependencies bool
+	SelectArtifact    bool
+	ProvenanceScopes  []string
+	Target            TargetOptions
+	RunCommand        CommandRunner
 }
 
 type TargetOptions struct {
@@ -93,6 +94,7 @@ type release struct {
 	UploadTimeISO  string            `json:"upload_time_iso_8601"`
 	Yanked         bool              `json:"yanked"`
 	YankedReason   string            `json:"yanked_reason"`
+	URL            string            `json:"url"`
 }
 
 func (a *Adapter) FetchMetadata(ctx context.Context, spec ecosystem.PackageSpec) (report.PackageReport, error) {
@@ -172,7 +174,7 @@ func (a *Adapter) FetchMetadata(ctx context.Context, spec ecosystem.PackageSpec)
 		warnings = append(warnings, warning)
 	}
 
-	return report.PackageReport{
+	pkg := report.PackageReport{
 		Ecosystem:           "PyPI",
 		Registry:            "PyPI",
 		Name:                name,
@@ -183,7 +185,7 @@ func (a *Adapter) FetchMetadata(ctx context.Context, spec ecosystem.PackageSpec)
 		License:             text.FirstNonEmpty(selectedInfo.License, data.Info.License),
 		Author:              text.FirstNonEmpty(formatAuthor(selectedInfo.Author, selectedInfo.AuthorEmail), formatAuthor(data.Info.Author, data.Info.AuthorEmail)),
 		PyPISelectedRelease: selectedRelease,
-		PyPIReleaseHistory:  releaseHistory(ctx, client, name, data.Releases, historyEntries, a.options.HistoryVersions),
+		PyPIReleaseHistory:  releaseHistory(ctx, client, name, data.Releases, historyEntries, a.options.HistoryVersions, a.options.FetchDependencies),
 		ProjectURLs:         projectURLs(selectedInfo, data.Info),
 		CreatedAt:           created,
 		ModifiedAt:          modified,
@@ -191,7 +193,15 @@ func (a *Adapter) FetchMetadata(ctx context.Context, spec ecosystem.PackageSpec)
 		Warnings:            warnings,
 		PyPIHistory:         historyDiagnostics,
 		PyPIProvenance:      provenance,
-	}, nil
+	}
+	if a.options.SelectArtifact {
+		candidate, err := selectPreferredArtifact(ctx, selectedRelease.Files, a.options)
+		if err != nil {
+			candidate.SelectionError = err.Error()
+		}
+		pkg.ArtifactCandidate = candidate
+	}
+	return pkg, nil
 }
 
 type releaseHistoryEntry struct {
@@ -199,7 +209,7 @@ type releaseHistoryEntry struct {
 	publishedAt string
 }
 
-func releaseHistory(ctx context.Context, client *http.Client, packageName string, releases map[string][]release, entries []releaseHistoryEntry, historyVersions int) []report.PyPIReleaseInfo {
+func releaseHistory(ctx context.Context, client *http.Client, packageName string, releases map[string][]release, entries []releaseHistoryEntry, historyVersions int, fetchDependencies bool) []report.PyPIReleaseInfo {
 	if historyVersions <= 0 {
 		return nil
 	}
@@ -208,8 +218,12 @@ func releaseHistory(ctx context.Context, client *http.Client, packageName string
 	}
 
 	history := make([]report.PyPIReleaseInfo, 0, len(entries))
-	for _, entry := range entries {
-		deps, optionalDeps, depsKnown := fetchReleaseDependencies(ctx, client, packageName, entry.version)
+	for index, entry := range entries {
+		var deps, optionalDeps []string
+		depsKnown := false
+		if fetchDependencies && index == 0 {
+			deps, optionalDeps, depsKnown = fetchReleaseDependencies(ctx, client, packageName, entry.version)
+		}
 		history = append(history, report.PyPIReleaseInfo{
 			Version:              entry.version,
 			PublishedAt:          entry.publishedAt,
@@ -350,11 +364,7 @@ func prepareProvenance(ctx context.Context, client *http.Client, packageName str
 		var err error
 		compatibleTags, err = resolveCompatibleTags(ctx, options)
 		if err != nil {
-			summary.UsedFallback = true
-			summary.FallbackReason = err.Error()
-			if summary.TargetPlatform == "" {
-				summary.TargetPlatform = hostPlatform()
-			}
+			summary.CompatibilityError = err.Error()
 		} else {
 			summary.CompatibleTagCount = len(compatibleTags)
 		}
@@ -363,7 +373,7 @@ func prepareProvenance(ctx context.Context, client *http.Client, packageName str
 	var selected []int
 	for i := range files {
 		for _, scope := range options.ProvenanceScopes {
-			if fileMatchesScope(files[i], scope, compatibleTags, summary.TargetPlatform, summary.UsedFallback) {
+			if fileMatchesScope(files[i], scope, compatibleTags) {
 				files[i].ProvenanceScopes = append(files[i].ProvenanceScopes, scope)
 			}
 		}
@@ -377,10 +387,10 @@ func prepareProvenance(ctx context.Context, client *http.Client, packageName str
 		}
 	}
 	annotateProvenance(ctx, client, packageName, version, files, selected)
-	if !summary.UsedFallback {
+	if summary.CompatibilityError == "" {
 		return summary, ""
 	}
-	return summary, fmt.Sprintf("PyPI install-target compatibility inspection failed; using fallback platform %q: %s", summary.TargetPlatform, summary.FallbackReason)
+	return summary, fmt.Sprintf("PyPI install-target compatibility inspection failed; compatible wheel provenance cannot be confirmed: %s", summary.CompatibilityError)
 }
 
 func releaseHasWheel(files []report.PyPIReleaseFile) bool {
@@ -393,6 +403,18 @@ func releaseHasWheel(files []report.PyPIReleaseFile) bool {
 }
 
 func resolveCompatibleTags(ctx context.Context, options Options) (map[string]struct{}, error) {
+	ordered, err := resolveCompatibleTagList(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+	tags := make(map[string]struct{}, len(ordered))
+	for _, tag := range ordered {
+		tags[tag] = struct{}{}
+	}
+	return tags, nil
+}
+
+func resolveCompatibleTagList(ctx context.Context, options Options) ([]string, error) {
 	runner := options.RunCommand
 	if runner == nil {
 		runner = runCommand
@@ -415,7 +437,7 @@ func resolveCompatibleTags(ctx context.Context, options Options) (map[string]str
 	if err != nil {
 		return nil, fmt.Errorf("%s -m pip debug --verbose failed: %w", executable, err)
 	}
-	tags := parseCompatibleTags(string(output))
+	tags := parseCompatibleTagList(string(output))
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("%s -m pip debug --verbose returned no compatible tags", executable)
 	}
@@ -500,7 +522,7 @@ func malformedPyPIEntryCanAffectWindow(malformed []releaseHistoryEntry, valid []
 	return false
 }
 
-func fileMatchesScope(file report.PyPIReleaseFile, scope string, compatibleTags map[string]struct{}, fallbackPlatform string, usedFallback bool) bool {
+func fileMatchesScope(file report.PyPIReleaseFile, scope string, compatibleTags map[string]struct{}) bool {
 	switch scope {
 	case ProvenanceScopeAllArtifacts:
 		return true
@@ -513,9 +535,6 @@ func fileMatchesScope(file report.PyPIReleaseFile, scope string, compatibleTags 
 		if file.PackageType != "bdist_wheel" {
 			return false
 		}
-		if usedFallback {
-			return wheelMatchesFallbackPlatform(file.Filename, fallbackPlatform)
-		}
 		for _, tag := range wheelTags(file.Filename) {
 			if _, ok := compatibleTags[tag]; ok {
 				return true
@@ -526,7 +545,17 @@ func fileMatchesScope(file report.PyPIReleaseFile, scope string, compatibleTags 
 }
 
 func parseCompatibleTags(output string) map[string]struct{} {
-	tags := make(map[string]struct{})
+	ordered := parseCompatibleTagList(output)
+	tags := make(map[string]struct{}, len(ordered))
+	for _, tag := range ordered {
+		tags[tag] = struct{}{}
+	}
+	return tags
+}
+
+func parseCompatibleTagList(output string) []string {
+	var tags []string
+	seen := make(map[string]struct{})
 	inTags := false
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -543,7 +572,10 @@ func parseCompatibleTags(output string) map[string]struct{} {
 		if strings.Count(trimmed, "-") < 2 {
 			break
 		}
-		tags[trimmed] = struct{}{}
+		if _, ok := seen[trimmed]; !ok {
+			seen[trimmed] = struct{}{}
+			tags = append(tags, trimmed)
+		}
 	}
 	return tags
 }
@@ -568,36 +600,6 @@ func wheelTags(filename string) []string {
 		}
 	}
 	return tags
-}
-
-func wheelMatchesFallbackPlatform(filename string, targetPlatform string) bool {
-	for _, tag := range wheelTags(filename) {
-		parts := strings.Split(tag, "-")
-		if len(parts) != 3 {
-			continue
-		}
-		if parts[2] == "any" || parts[2] == targetPlatform {
-			return true
-		}
-	}
-	return false
-}
-
-func hostPlatform() string {
-	switch runtime.GOOS {
-	case "windows":
-		if runtime.GOARCH == "amd64" {
-			return "win_amd64"
-		}
-		return "win_" + runtime.GOARCH
-	case "darwin":
-		return "macosx_" + runtime.GOARCH
-	default:
-		if runtime.GOARCH == "amd64" {
-			return runtime.GOOS + "_x86_64"
-		}
-		return runtime.GOOS + "_" + runtime.GOARCH
-	}
 }
 
 func compactSortedStrings(values []string) []string {
@@ -638,12 +640,45 @@ func releaseFiles(files []release) []report.PyPIReleaseFile {
 			Digests:        compactDigests(file.Digests),
 			Yanked:         file.Yanked,
 			YankedReason:   file.YankedReason,
+			URL:            file.URL,
 		})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Filename < result[j].Filename
 	})
 	return result
+}
+
+func selectPreferredArtifact(ctx context.Context, files []report.PyPIReleaseFile, options Options) (report.ArtifactCandidate, error) {
+	if releaseHasWheel(files) {
+		tags, err := resolveCompatibleTagList(ctx, options)
+		if err == nil {
+			for _, tag := range tags {
+				for _, file := range files {
+					if file.PackageType == "bdist_wheel" && !file.Yanked && containsString(wheelTags(file.Filename), tag) {
+						return pypiArtifactCandidate(file), nil
+					}
+				}
+			}
+		}
+	}
+	for _, file := range files {
+		if file.PackageType == "sdist" && !file.Yanked {
+			return pypiArtifactCandidate(file), nil
+		}
+	}
+	return report.ArtifactCandidate{}, fmt.Errorf("no downloadable non-yanked install-target artifact is available")
+}
+
+func pypiArtifactCandidate(file report.PyPIReleaseFile) report.ArtifactCandidate {
+	return report.ArtifactCandidate{
+		URL:             file.URL,
+		Filename:        file.Filename,
+		PackageType:     file.PackageType,
+		ExpectedSize:    file.Size,
+		DigestAlgorithm: "sha256",
+		DigestValue:     file.Digests["sha256"],
+	}
 }
 
 func compactDigests(values map[string]string) map[string]string {
@@ -665,11 +700,9 @@ func compactDigests(values map[string]string) map[string]string {
 }
 
 func dependenciesKnown(info info) bool {
-	if info.RequiresDist == nil {
-		return false
-	}
 	for _, value := range info.Dynamic {
-		if strings.EqualFold(strings.TrimSpace(value), "requires_dist") {
+		value = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value)), "-", "_")
+		if value == "requires_dist" {
 			return false
 		}
 	}

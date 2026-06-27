@@ -184,7 +184,10 @@ func EvaluateWithOptions(pkg *report.PackageReport, cfg config.Config, now time.
 			if policy.InstallLifecycleHistoryVersions <= 0 {
 				return ""
 			}
-			return pkg.NPMHistory.IndeterminateReason
+			if pkg.NPMHistory.IndeterminateReason != "" {
+				return pkg.NPMHistory.IndeterminateReason
+			}
+			return installlifecycle.HistoryIndeterminateReason(*pkg, policy.InstallLifecycleHistoryVersions)
 		},
 		evidence: func() []string {
 			return append(installlifecycle.HistoryEvidence(*pkg, npmHistoryVersions), integerThresholdEvidence("history limits", tiers, func(policy config.PolicyTierConfig) int {
@@ -206,7 +209,10 @@ func EvaluateWithOptions(pkg *report.PackageReport, cfg config.Config, now time.
 			if !policy.InstallScriptAddedAfterDormancy {
 				return ""
 			}
-			return pkg.NPMHistory.IndeterminateReason
+			if pkg.NPMHistory.IndeterminateReason != "" {
+				return pkg.NPMHistory.IndeterminateReason
+			}
+			return installlifecycle.DormantAddedIndeterminateReason(*pkg, policy.InstallLifecycleHistoryVersions, policy.DormantReleaseThresholdDays)
 		},
 		evidence: func() []string {
 			return append(installlifecycle.DormantAddedEvidence(*pkg, npmHistoryVersions, maxTierInteger(tiers, func(policy config.PolicyTierConfig) int {
@@ -233,7 +239,13 @@ func EvaluateWithOptions(pkg *report.PackageReport, cfg config.Config, now time.
 		applicable: pypiApplicable,
 		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.PyPIArtifactShapeChange }),
 		indeterminate: func(policy config.PolicyTierConfig) string {
-			return pypiHistoryIndeterminateReason(*pkg, policy.PyPIArtifactShapeChange)
+			if reason := pypiHistoryIndeterminateReason(*pkg, policy.PyPIArtifactShapeChange); reason != "" {
+				return reason
+			}
+			if !policy.PyPIArtifactShapeChange {
+				return ""
+			}
+			return pypiartifacts.ArtifactShapeIndeterminateReason(*pkg, policy.PyPIArtifactHistoryVersions)
 		},
 		evidence: func() []string {
 			return append(pypiartifacts.ArtifactShapeEvidence(*pkg, pypiHistoryVersions), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
@@ -252,7 +264,13 @@ func EvaluateWithOptions(pkg *report.PackageReport, cfg config.Config, now time.
 		applicable: pypiApplicable,
 		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.PyPIFileSizeJumpPercent > 0 }),
 		indeterminate: func(policy config.PolicyTierConfig) string {
-			return pypiHistoryIndeterminateReason(*pkg, policy.PyPIFileSizeJumpPercent > 0)
+			if reason := pypiHistoryIndeterminateReason(*pkg, policy.PyPIFileSizeJumpPercent > 0); reason != "" {
+				return reason
+			}
+			if policy.PyPIFileSizeJumpPercent <= 0 {
+				return ""
+			}
+			return pypiartifacts.FileSizeIndeterminateReason(*pkg, policy.PyPIArtifactHistoryVersions)
 		},
 		evidence: func() []string {
 			return append(pypiartifacts.FileSizeEvidence(*pkg, pypiHistoryVersions), integerThresholdEvidence("thresholds (percent)", tiers, func(policy config.PolicyTierConfig) int {
@@ -271,7 +289,13 @@ func EvaluateWithOptions(pkg *report.PackageReport, cfg config.Config, now time.
 		applicable: pypiApplicable,
 		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.PyPIDependencyChange }),
 		indeterminate: func(policy config.PolicyTierConfig) string {
-			return pypiHistoryIndeterminateReason(*pkg, policy.PyPIDependencyChange)
+			if reason := pypiHistoryIndeterminateReason(*pkg, policy.PyPIDependencyChange); reason != "" {
+				return reason
+			}
+			if !policy.PyPIDependencyChange {
+				return ""
+			}
+			return pypiartifacts.DependencyIndeterminateReason(*pkg, policy.PyPIArtifactHistoryVersions)
 		},
 		evidence: func() []string {
 			evidence := append(pypiartifacts.DependencyEvidence(*pkg, pypiHistoryVersions, anyTier(tiers, func(policy config.PolicyTierConfig) bool {
@@ -291,9 +315,16 @@ func EvaluateWithOptions(pkg *report.PackageReport, cfg config.Config, now time.
 		},
 	})
 	evaluate(debugPolicyCheck{
-		id:         "pypi_provenance",
-		applicable: pypiApplicable,
-		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.PyPIProvenanceRequired }),
+		id:                   "pypi_provenance",
+		applicable:           pypiApplicable,
+		enabled:              anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.PyPIProvenanceRequired }),
+		checkOnIndeterminate: true,
+		indeterminate: func(policy config.PolicyTierConfig) string {
+			if !policy.PyPIProvenanceRequired {
+				return ""
+			}
+			return pypiartifacts.ProvenanceIndeterminateReason(*pkg, policy.PyPIProvenanceScope)
+		},
 		evidence: func() []string {
 			return append(pypiartifacts.ProvenanceEvidence(*pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
 				return policy.PyPIProvenanceRequired
@@ -311,7 +342,13 @@ func EvaluateWithOptions(pkg *report.PackageReport, cfg config.Config, now time.
 		applicable: pypiApplicable,
 		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.PyPIReleaseFileCountChange }),
 		indeterminate: func(policy config.PolicyTierConfig) string {
-			return pypiHistoryIndeterminateReason(*pkg, policy.PyPIReleaseFileCountChange)
+			if reason := pypiHistoryIndeterminateReason(*pkg, policy.PyPIReleaseFileCountChange); reason != "" {
+				return reason
+			}
+			if !policy.PyPIReleaseFileCountChange {
+				return ""
+			}
+			return pypiartifacts.ReleaseFileCountIndeterminateReason(*pkg, policy.PyPIArtifactHistoryVersions)
 		},
 		evidence: func() []string {
 			return append(pypiartifacts.ReleaseFileCountEvidence(*pkg, pypiHistoryVersions), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
@@ -345,12 +382,13 @@ func hasBlockFinding(findings []report.Finding) bool {
 }
 
 type debugPolicyCheck struct {
-	id            string
-	applicable    bool
-	enabled       bool
-	indeterminate func(config.PolicyTierConfig) string
-	evidence      func() []string
-	check         func(config.PolicyTierConfig) []report.Finding
+	id                   string
+	applicable           bool
+	enabled              bool
+	checkOnIndeterminate bool
+	indeterminate        func(config.PolicyTierConfig) string
+	evidence             func() []string
+	check                func(config.PolicyTierConfig) []report.Finding
 }
 
 func evaluatePolicyCheck(tiers []policyTier, debug bool, check debugPolicyCheck) ([]report.Finding, report.DebugTraceEntry) {
@@ -397,6 +435,9 @@ func firstMatchingTierCheckResult(tiers []policyTier, check debugPolicyCheck) ([
 		if check.indeterminate != nil {
 			if reason := check.indeterminate(tier.policy); reason != "" {
 				findings := []report.Finding{{Message: "policy evaluation is indeterminate: " + reason}}
+				if check.checkOnIndeterminate {
+					findings = append(check.check(tier.policy), findings...)
+				}
 				return withSeverity(findings, tier.level), tier.level, true
 			}
 		}

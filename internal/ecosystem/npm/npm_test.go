@@ -131,6 +131,35 @@ func TestFetchMetadataSelectsExactVersion(t *testing.T) {
 	}
 }
 
+func TestFetchMetadataSelectsVerifiedArtifactCandidate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"name": "@scope/pkg",
+			"dist-tags": {"latest": "1.2.3"},
+			"time": {"1.2.3": "2026-01-01T00:00:00Z"},
+			"versions": {"1.2.3": {"dist": {
+				"tarball": "https://registry.example/pkg.tgz",
+				"integrity": "sha256-YWJj sha512-ZGVm"
+			}}}
+		}`))
+	}))
+	defer server.Close()
+
+	oldBase := RegistryBaseURL
+	RegistryBaseURL = server.URL
+	defer func() { RegistryBaseURL = oldBase }()
+
+	pkg, err := NewWithOptions(server.Client(), Options{SelectArtifact: true}).FetchMetadata(context.Background(), ecosystem.PackageSpec{Name: "@scope/pkg"})
+	if err != nil {
+		t.Fatalf("FetchMetadata returned error: %v", err)
+	}
+	candidate := pkg.ArtifactCandidate
+	if candidate.URL != "https://registry.example/pkg.tgz" || candidate.Filename != "pkg-1.2.3.tgz" || candidate.DigestAlgorithm != "sha512" || candidate.DigestValue != "ZGVm" {
+		t.Fatalf("candidate = %+v, want selected npm tarball with strongest digest", candidate)
+	}
+}
+
 func TestFetchMetadataRejectsMissingExactVersion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

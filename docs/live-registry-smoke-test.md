@@ -1,5 +1,7 @@
 # Live Registry Smoke Test
 
+> Historical note: fallback behavior recorded in this document reflects the implementation at the time of the run. Current SourceGate behavior does not guess compatible wheels when `pip debug` fails; install-target provenance is marked indeterminate while source-distribution provenance remains checkable.
+
 This report records a SourceGate `0.5.1` live-registry validation run performed on
 `2026-05-31T23:26:25+03:00`.
 
@@ -196,7 +198,7 @@ Representative `0.5.2` trace excerpts:
   scope install-target missing provenance files: sqlalchemy-2.0.50-cp313-cp313-win_amd64.whl; sqlalchemy-2.0.50-py3-none-any.whl; sqlalchemy-2.0.50.tar.gz
 ```
 
-The forced fallback smoke test also passed:
+The `0.5.2` forced fallback smoke test also passed:
 
 ```powershell
 .\sourcegate-live.exe --debug --python definitely-missing-python pip install cryptography
@@ -204,3 +206,27 @@ The forced fallback smoke test also passed:
 
 It printed a non-policy warning, fell back to `win_amd64`, checked five
 fallback-relevant files, and left the decision as `ALLOW`.
+
+## Targeted Regression Smoke Test: June 14, 2026
+
+The current implementation was checked against three exact live releases:
+
+| Command | Observed result | Classification |
+| --- | --- | --- |
+| `.\sourcegate-live.exe --debug npm install sharp@0.34.5` | Lifecycle history compared the selected release directly with `0.34.4` and reported the changed `install` script. | PASS |
+| `.\sourcegate-live.exe --debug pip install requests==2.34.2` | Dependency history compared directly with `2.34.1`; no dependency change matched. | PASS |
+| `.\sourcegate-live.exe --debug --python definitely-missing-python pip install cryptography==48.0.0` | Printed a compatibility warning, checked the known source distribution, selected no guessed wheels, and traced install-target provenance as `INDETERMINATE`. | PASS |
+
+No package was installed.
+
+## Artifact Download Smoke Test: June 14, 2026
+
+The initial `--inspect` download stage was checked against exact live releases:
+
+| Command | Observed result | Classification |
+| --- | --- | --- |
+| `.\sourcegate-live.exe --inspect npm install lodash@4.17.21` | Downloaded `lodash-4.17.21.tgz` (318,961 bytes), verified SHA-512, and deleted the temporary file. | PASS |
+| `.\sourcegate-live.exe --inspect pip install requests==2.34.2` | Selected and downloaded `requests-2.34.2-py3-none-any.whl` (73,075 bytes), verified SHA-256, and deleted the temporary file. | PASS |
+| `.\sourcegate-live.exe --inspect npm install sharp@0.34.5` | Metadata policy produced `BLOCK`; artifact status was `SKIPPED_BLOCKED` and no artifact download was attempted. | PASS |
+
+No package was installed or archive extracted.

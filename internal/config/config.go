@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/sourcegate/sourcegate/internal/ecosystem"
@@ -49,6 +52,19 @@ type PolicyTierConfig struct {
 	PyPIReleaseFileCountChange      bool                `json:"pypi_release_file_count_change"`
 	ProtectedPackages               map[string][]string `json:"protected_packages"`
 	ProtectedTokens                 map[string][]string `json:"protected_tokens"`
+}
+
+var policyTierFields = requiredJSONFields(reflect.TypeOf(PolicyTierConfig{}))
+
+func requiredJSONFields(valueType reflect.Type) []string {
+	fields := make([]string, 0, valueType.NumField())
+	for index := 0; index < valueType.NumField(); index++ {
+		name := strings.Split(valueType.Field(index).Tag.Get("json"), ",")[0]
+		if name != "" && name != "-" {
+			fields = append(fields, name)
+		}
+	}
+	return fields
 }
 
 func (policy *PolicyTierConfig) UnmarshalJSON(data []byte) error {
@@ -163,11 +179,19 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("read config %s: %w", path, err)
 	}
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+
+	if err := validateConfigCompleteness(data); err != nil {
+		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
+	}
 
 	var config Config
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&config); err != nil {
+		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if err := requireJSONEOF(decoder); err != nil {
 		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if err := validatePyPIRuntime(config.PyPIRuntime); err != nil {
@@ -189,6 +213,57 @@ func Load(path string) (Config, error) {
 	return config, nil
 }
 
+func validateConfigCompleteness(data []byte) error {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return err
+	}
+
+	var missing []string
+	policyRaw, ok := root["policy"]
+	if !ok {
+		return fmt.Errorf("missing required field policy")
+	}
+
+	var policy map[string]json.RawMessage
+	if err := json.Unmarshal(policyRaw, &policy); err != nil {
+		return fmt.Errorf("policy must be an object: %w", err)
+	}
+	for _, tierName := range []string{"inform", "alert", "block"} {
+		tierRaw, ok := policy[tierName]
+		if !ok {
+			missing = append(missing, "policy."+tierName)
+			continue
+		}
+		var tier map[string]json.RawMessage
+		if err := json.Unmarshal(tierRaw, &tier); err != nil {
+			return fmt.Errorf("policy.%s must be an object: %w", tierName, err)
+		}
+		for _, field := range policyTierFields {
+			if _, ok := tier[field]; !ok {
+				missing = append(missing, "policy."+tierName+"."+field)
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+	return fmt.Errorf("missing required field(s): %s", strings.Join(missing, ", "))
+}
+
+func requireJSONEOF(decoder *json.Decoder) error {
+	var extra json.RawMessage
+	err := decoder.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("configuration must contain exactly one JSON value")
+}
+
 func validatePolicyTier(tier string, policy PolicyTierConfig) error {
 	if policy.MinimumDaysSinceLatestRelease < 0 {
 		return fmt.Errorf("policy.%s.minimum_days_since_latest_release cannot be negative", tier)
@@ -204,6 +279,27 @@ func validatePolicyTier(tier string, policy PolicyTierConfig) error {
 	}
 	if policy.PyPIFileSizeJumpPercent < 0 {
 		return fmt.Errorf("policy.%s.pypi_file_size_jump_percent cannot be negative", tier)
+	}
+	if policy.InstallScriptAddedAfterDormancy {
+		if policy.InstallLifecycleHistoryVersions <= 0 {
+			return fmt.Errorf("policy.%s.install_lifecycle_history_versions must be configured when install_script_added_after_dormancy is true", tier)
+		}
+		if policy.DormantReleaseThresholdDays <= 0 {
+			return fmt.Errorf("policy.%s.dormant_release_threshold_days must be configured when install_script_added_after_dormancy is true", tier)
+		}
+	}
+	if policy.PyPIIncludeOptionalDependencies && !policy.PyPIDependencyChange {
+		return fmt.Errorf("policy.%s.pypi_dependency_change must be true when pypi_include_optional_dependencies is true", tier)
+	}
+	historyDependentPyPIEnabled := policy.PyPIArtifactShapeChange ||
+		policy.PyPIFileSizeJumpPercent > 0 ||
+		policy.PyPIDependencyChange ||
+		policy.PyPIReleaseFileCountChange
+	if historyDependentPyPIEnabled && policy.PyPIArtifactHistoryVersions <= 0 {
+		return fmt.Errorf("policy.%s.pypi_artifact_history_versions must be configured when a history-dependent PyPI check is enabled", tier)
+	}
+	if policy.PyPIArtifactHistoryVersions > 0 && !historyDependentPyPIEnabled {
+		return fmt.Errorf("policy.%s.pypi_artifact_history_versions must be disabled when no history-dependent PyPI check is enabled", tier)
 	}
 	if err := validatePyPIProvenanceScope(tier, policy); err != nil {
 		return err

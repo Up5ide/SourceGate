@@ -1,6 +1,7 @@
 package dormant
 
 import (
+	"math"
 	"testing"
 
 	"github.com/sourcegate/sourcegate/internal/report"
@@ -8,7 +9,7 @@ import (
 
 func TestCheckBlocksDormantRelease(t *testing.T) {
 	findings := Check(report.PackageReport{
-		SelectedPublishedAt:   "2026-05-27T12:00:00Z",
+		SelectedPublishedAt: "2026-05-27T12:00:00Z",
 		PreviousPublishedAt: "2025-05-27T12:00:00Z",
 	}, 180)
 
@@ -17,9 +18,20 @@ func TestCheckBlocksDormantRelease(t *testing.T) {
 	}
 }
 
+func TestCheckHandlesVeryLargeThresholdWithoutOverflow(t *testing.T) {
+	findings := Check(report.PackageReport{
+		SelectedPublishedAt: "2026-05-27T12:00:00Z",
+		PreviousPublishedAt: "2026-05-26T12:00:00Z",
+	}, math.MaxInt)
+
+	if len(findings) != 0 {
+		t.Fatalf("findings = %+v, want no overflow match", findings)
+	}
+}
+
 func TestCheckAllowsNonDormantRelease(t *testing.T) {
 	findings := Check(report.PackageReport{
-		SelectedPublishedAt:   "2026-05-27T12:00:00Z",
+		SelectedPublishedAt: "2026-05-27T12:00:00Z",
 		PreviousPublishedAt: "2026-04-27T12:00:00Z",
 	}, 180)
 

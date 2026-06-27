@@ -21,12 +21,12 @@ func Check(pkg report.PackageReport, thresholdDays int) []report.Finding {
 	}
 
 	inactivity := selectedPublishedAt.UTC().Sub(previousPublishedAt.UTC())
-	threshold := time.Duration(thresholdDays) * 24 * time.Hour
-	if inactivity >= threshold {
+	inactivityDays := int64(inactivity / (24 * time.Hour))
+	if inactivity >= 0 && inactivityDays >= int64(thresholdDays) {
 		return []report.Finding{{
 			Message: fmt.Sprintf(
 				"selected release follows %d day(s) of package inactivity, meeting or exceeding configured threshold of %d day(s)",
-				int(inactivity.Hours()/24),
+				inactivityDays,
 				thresholdDays,
 			),
 		}}

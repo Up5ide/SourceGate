@@ -2,6 +2,7 @@ package npm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,6 +27,7 @@ type Adapter struct {
 
 type Options struct {
 	HistoryVersions int
+	SelectArtifact  bool
 }
 
 func New(client *http.Client) *Adapter {
@@ -56,6 +58,12 @@ type registryResponse struct {
 type versionDoc struct {
 	License string            `json:"license"`
 	Scripts map[string]string `json:"scripts"`
+	Dist    distribution      `json:"dist"`
+}
+
+type distribution struct {
+	Tarball   string `json:"tarball"`
+	Integrity string `json:"integrity"`
 }
 
 type person struct {
@@ -123,7 +131,7 @@ func (a *Adapter) FetchMetadata(ctx context.Context, spec ecosystem.PackageSpec)
 	}
 	historyEntries, historyDiagnostics := selectHistory(data.Time, selectedVersion, max(1, a.options.HistoryVersions))
 
-	return report.PackageReport{
+	pkg := report.PackageReport{
 		Ecosystem:           "npm",
 		Registry:            "npm registry",
 		Name:                text.FirstNonEmpty(data.Name, packageName),
@@ -141,7 +149,47 @@ func (a *Adapter) FetchMetadata(ctx context.Context, spec ecosystem.PackageSpec)
 		ModifiedAt:          data.Time["modified"],
 		VersionCount:        len(data.Versions),
 		NPMHistory:          historyDiagnostics,
-	}, nil
+	}
+	if a.options.SelectArtifact {
+		pkg.ArtifactCandidate = npmArtifactCandidate(packageName, selectedVersion, selectedDoc.Dist)
+	}
+	return pkg, nil
+}
+
+func npmArtifactCandidate(packageName, selectedVersion string, dist distribution) report.ArtifactCandidate {
+	algorithm, digest := strongestSRI(dist.Integrity)
+	return report.ArtifactCandidate{
+		URL:             strings.TrimSpace(dist.Tarball),
+		Filename:        npmTarballFilename(packageName, selectedVersion),
+		PackageType:     "npm-tarball",
+		DigestAlgorithm: algorithm,
+		DigestValue:     digest,
+	}
+}
+
+func strongestSRI(integrity string) (string, string) {
+	values := strings.Fields(integrity)
+	for _, algorithm := range []string{"sha512", "sha256"} {
+		prefix := algorithm + "-"
+		for _, value := range values {
+			if !strings.HasPrefix(value, prefix) {
+				continue
+			}
+			digest := strings.TrimPrefix(value, prefix)
+			if _, err := base64.StdEncoding.DecodeString(digest); err == nil {
+				return algorithm, digest
+			}
+		}
+	}
+	return "", ""
+}
+
+func npmTarballFilename(packageName, selectedVersion string) string {
+	name := packageName
+	if index := strings.LastIndex(name, "/"); index >= 0 {
+		name = name[index+1:]
+	}
+	return name + "-" + selectedVersion + ".tgz"
 }
 
 type lifecycleHistoryEntry struct {

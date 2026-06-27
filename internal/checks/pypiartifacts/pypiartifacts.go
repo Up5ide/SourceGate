@@ -2,6 +2,8 @@ package pypiartifacts
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 	"sort"
 	"strings"
 
@@ -10,8 +12,11 @@ import (
 )
 
 func CheckArtifactShapeChange(pkg report.PackageReport, historyVersions int) []report.Finding {
-	if !isPyPI(pkg) || historyVersions <= 0 || len(pkg.PyPISelectedRelease.Files) == 0 {
+	if !isPyPI(pkg) || historyVersions <= 0 {
 		return nil
+	}
+	if reason := ArtifactShapeIndeterminateReason(pkg, historyVersions); reason != "" {
+		return []report.Finding{{Message: reason}}
 	}
 
 	history := limitedHistory(pkg.PyPIReleaseHistory, historyVersions)
@@ -37,10 +42,10 @@ func CheckArtifactShapeChange(pkg report.PackageReport, historyVersions int) []r
 		findings = append(findings, report.Finding{Message: "selected PyPI release removes source distribution artifacts present in the previous release"})
 	}
 
-	newWheelTags := sortedDifference(latest.wheelTags, historical.wheelTags)
-	if len(newWheelTags) > 0 {
+	newWheelPlatforms := sortedDifference(latest.wheelPlatforms, historical.wheelPlatforms)
+	if len(newWheelPlatforms) > 0 {
 		findings = append(findings, report.Finding{
-			Message: fmt.Sprintf("selected PyPI release adds new wheel platform tag(s): %s", strings.Join(newWheelTags, ", ")),
+			Message: fmt.Sprintf("selected PyPI release adds new wheel platform tag(s): %s", strings.Join(newWheelPlatforms, ", ")),
 		})
 	}
 
@@ -59,9 +64,26 @@ func CheckArtifactShapeChange(pkg report.PackageReport, historyVersions int) []r
 	return findings
 }
 
+func ArtifactShapeIndeterminateReason(pkg report.PackageReport, historyVersions int) string {
+	if !isPyPI(pkg) || historyVersions <= 0 {
+		return ""
+	}
+	if len(pkg.PyPISelectedRelease.Files) == 0 {
+		return "selected PyPI release artifact metadata is unavailable"
+	}
+	history := limitedHistory(pkg.PyPIReleaseHistory, historyVersions)
+	if reason := missingHistoryFilesReason(history, "artifact"); reason != "" {
+		return reason
+	}
+	return ""
+}
+
 func CheckFileSizeJump(pkg report.PackageReport, historyVersions int, jumpPercent int) []report.Finding {
-	if !isPyPI(pkg) || historyVersions <= 0 || jumpPercent <= 0 || len(pkg.PyPISelectedRelease.Files) == 0 {
+	if !isPyPI(pkg) || historyVersions <= 0 || jumpPercent <= 0 {
 		return nil
+	}
+	if reason := FileSizeIndeterminateReason(pkg, historyVersions); reason != "" {
+		return []report.Finding{{Message: reason}}
 	}
 
 	history := limitedHistory(pkg.PyPIReleaseHistory, historyVersions)
@@ -69,14 +91,14 @@ func CheckFileSizeJump(pkg report.PackageReport, historyVersions int, jumpPercen
 		return nil
 	}
 
-	latestTotal, latestLargest, historicalMedianTotal, historicalMedianLargest := fileSizeStats(pkg, historyVersions)
+	latestTotal, latestLargest, historicalMedianTotal, historicalMedianLargest, _ := fileSizeStats(pkg, historyVersions)
 	var findings []report.Finding
-	if historicalMedianTotal > 0 && latestTotal*100 >= historicalMedianTotal*int64(100+jumpPercent) {
+	if increaseAtLeastPercent(latestTotal, historicalMedianTotal, jumpPercent) {
 		findings = append(findings, report.Finding{
 			Message: fmt.Sprintf("selected PyPI release total file size is %d bytes, increased by at least %d%% over historical median %d bytes", latestTotal, jumpPercent, historicalMedianTotal),
 		})
 	}
-	if historicalMedianLargest > 0 && latestLargest*100 >= historicalMedianLargest*int64(100+jumpPercent) {
+	if increaseAtLeastPercent(latestLargest, historicalMedianLargest, jumpPercent) {
 		findings = append(findings, report.Finding{
 			Message: fmt.Sprintf("selected PyPI release largest file is %d bytes, increased by at least %d%% over historical median largest file %d bytes", latestLargest, jumpPercent, historicalMedianLargest),
 		})
@@ -84,20 +106,45 @@ func CheckFileSizeJump(pkg report.PackageReport, historyVersions int, jumpPercen
 	return findings
 }
 
-func fileSizeStats(pkg report.PackageReport, historyVersions int) (int64, int64, int64, int64) {
-	latestTotal := totalSize(pkg.PyPISelectedRelease.Files)
+func FileSizeIndeterminateReason(pkg report.PackageReport, historyVersions int) string {
+	if !isPyPI(pkg) || historyVersions <= 0 {
+		return ""
+	}
+	if len(pkg.PyPISelectedRelease.Files) == 0 {
+		return "selected PyPI release file-size metadata is unavailable"
+	}
+	history := limitedHistory(pkg.PyPIReleaseHistory, historyVersions)
+	if len(history) == 0 {
+		return ""
+	}
+	if reason := missingHistoryFilesReason(history, "file-size"); reason != "" {
+		return reason
+	}
+	_, _, _, _, known := fileSizeStats(pkg, historyVersions)
+	if !known {
+		return "PyPI release file-size metadata is invalid or exceeds supported numeric range"
+	}
+	return ""
+}
+
+func fileSizeStats(pkg report.PackageReport, historyVersions int) (int64, int64, int64, int64, bool) {
+	latestTotal, latestKnown := totalSize(pkg.PyPISelectedRelease.Files)
 	latestLargest := largestSize(pkg.PyPISelectedRelease.Files)
 	history := limitedHistory(pkg.PyPIReleaseHistory, historyVersions)
 	historyTotals := make([]int64, 0, len(history))
 	historyLargest := make([]int64, 0, len(history))
 	for _, release := range history {
 		if len(release.Files) == 0 {
-			continue
+			return 0, 0, 0, 0, false
 		}
-		historyTotals = append(historyTotals, totalSize(release.Files))
+		total, known := totalSize(release.Files)
+		if !known {
+			return 0, 0, 0, 0, false
+		}
+		historyTotals = append(historyTotals, total)
 		historyLargest = append(historyLargest, largestSize(release.Files))
 	}
-	return latestTotal, latestLargest, medianInt64(historyTotals), medianInt64(historyLargest)
+	return latestTotal, latestLargest, medianInt64(historyTotals), medianInt64(historyLargest), latestKnown && len(historyTotals) > 0
 }
 
 func CheckDependencyChange(pkg report.PackageReport, historyVersions int, includeOptional bool) []report.Finding {
@@ -110,7 +157,10 @@ func CheckDependencyChange(pkg report.PackageReport, historyVersions int, includ
 		return []report.Finding{{Message: "selected PyPI dependency metadata is unavailable or dynamic; dependency changes cannot be confirmed"}}
 	}
 	if !comparison.previousKnown {
-		return []report.Finding{{Message: "previous PyPI dependency metadata is unavailable; dependency changes cannot be confirmed"}}
+		if len(limitedHistory(pkg.PyPIReleaseHistory, historyVersions)) == 0 {
+			return nil
+		}
+		return []report.Finding{{Message: "immediate previous PyPI dependency metadata is unavailable or dynamic; dependency changes cannot be confirmed"}}
 	}
 
 	var findings []report.Finding
@@ -124,19 +174,45 @@ func CheckDependencyChange(pkg report.PackageReport, historyVersions int, includ
 			Message: fmt.Sprintf("selected PyPI release removes declared dependency name(s): %s", strings.Join(comparison.removed, ", ")),
 		})
 	}
+	if len(comparison.requiredToOptional) > 0 {
+		findings = append(findings, report.Finding{
+			Message: fmt.Sprintf("selected PyPI release moves dependency name(s) from required to optional: %s", strings.Join(comparison.requiredToOptional, ", ")),
+		})
+	}
+	if len(comparison.optionalToRequired) > 0 {
+		findings = append(findings, report.Finding{
+			Message: fmt.Sprintf("selected PyPI release moves dependency name(s) from optional to required: %s", strings.Join(comparison.optionalToRequired, ", ")),
+		})
+	}
 	return findings
 }
 
+func DependencyIndeterminateReason(pkg report.PackageReport, historyVersions int) string {
+	if !isPyPI(pkg) || historyVersions <= 0 {
+		return ""
+	}
+	if !pkg.PyPISelectedRelease.DependenciesKnown {
+		return "selected PyPI dependency metadata is unavailable or dynamic"
+	}
+	history := limitedHistory(pkg.PyPIReleaseHistory, historyVersions)
+	if len(history) > 0 && !history[0].DependenciesKnown {
+		return "immediate previous PyPI dependency metadata is unavailable or dynamic"
+	}
+	return ""
+}
+
 type dependencyComparison struct {
-	latestKnown     bool
-	previousKnown   bool
-	previousVersion string
-	added           []string
-	removed         []string
-	requiredAdded   []string
-	requiredRemoved []string
-	optionalAdded   []string
-	optionalRemoved []string
+	latestKnown        bool
+	previousKnown      bool
+	previousVersion    string
+	added              []string
+	removed            []string
+	requiredAdded      []string
+	requiredRemoved    []string
+	optionalAdded      []string
+	optionalRemoved    []string
+	requiredToOptional []string
+	optionalToRequired []string
 }
 
 func compareDependencies(pkg report.PackageReport, historyVersions int, includeOptional bool) dependencyComparison {
@@ -145,15 +221,13 @@ func compareDependencies(pkg report.PackageReport, historyVersions int, includeO
 		return comparison
 	}
 
-	var previous report.PyPIReleaseInfo
-	for _, release := range limitedHistory(pkg.PyPIReleaseHistory, historyVersions) {
-		if release.DependenciesKnown {
-			previous = release
-			comparison.previousKnown = true
-			comparison.previousVersion = release.Version
-			break
-		}
+	history := limitedHistory(pkg.PyPIReleaseHistory, historyVersions)
+	if len(history) == 0 {
+		return comparison
 	}
+	previous := history[0]
+	comparison.previousKnown = previous.DependenciesKnown
+	comparison.previousVersion = previous.Version
 	if !comparison.previousKnown {
 		return comparison
 	}
@@ -169,8 +243,12 @@ func compareDependencies(pkg report.PackageReport, historyVersions int, includeO
 		previousOptional := stringSet(previous.OptionalDependencies)
 		comparison.optionalAdded = sortedDifference(latestOptional, previousOptional)
 		comparison.optionalRemoved = sortedDifference(previousOptional, latestOptional)
-		comparison.added = sortedUniqueStrings(append(comparison.added, comparison.optionalAdded...))
-		comparison.removed = sortedUniqueStrings(append(comparison.removed, comparison.optionalRemoved...))
+		comparison.requiredToOptional = sortedIntersection(previousDeps, latestOptional)
+		comparison.optionalToRequired = sortedIntersection(previousOptional, latestDeps)
+		latestAll := unionSets(latestDeps, latestOptional)
+		previousAll := unionSets(previousDeps, previousOptional)
+		comparison.added = sortedDifference(latestAll, previousAll)
+		comparison.removed = sortedDifference(previousAll, latestAll)
 	}
 	return comparison
 }
@@ -214,9 +292,19 @@ func CheckProvenanceRequired(pkg report.PackageReport, scope string) []report.Fi
 	return findings
 }
 
+func ProvenanceIndeterminateReason(pkg report.PackageReport, scope string) string {
+	if !isPyPI(pkg) || scope != "install-target" || pkg.PyPIProvenance.CompatibilityError == "" {
+		return ""
+	}
+	return "PyPI install-target wheel compatibility could not be resolved: " + pkg.PyPIProvenance.CompatibilityError
+}
+
 func CheckReleaseFileCountChange(pkg report.PackageReport, historyVersions int) []report.Finding {
-	if !isPyPI(pkg) || historyVersions <= 0 || len(pkg.PyPISelectedRelease.Files) == 0 {
+	if !isPyPI(pkg) || historyVersions <= 0 {
 		return nil
+	}
+	if reason := ReleaseFileCountIndeterminateReason(pkg, historyVersions); reason != "" {
+		return []report.Finding{{Message: reason}}
 	}
 
 	latestCount, historicalMedian := releaseFileCountStats(pkg, historyVersions)
@@ -229,28 +317,59 @@ func CheckReleaseFileCountChange(pkg report.PackageReport, historyVersions int) 
 	}}
 }
 
+func ReleaseFileCountIndeterminateReason(pkg report.PackageReport, historyVersions int) string {
+	if !isPyPI(pkg) || historyVersions <= 0 {
+		return ""
+	}
+	if len(pkg.PyPISelectedRelease.Files) == 0 {
+		return "selected PyPI release file-count metadata is unavailable"
+	}
+	history := limitedHistory(pkg.PyPIReleaseHistory, historyVersions)
+	if reason := missingHistoryFilesReason(history, "file-count"); reason != "" {
+		return reason
+	}
+	return ""
+}
+
 func releaseFileCountStats(pkg report.PackageReport, historyVersions int) (int, int) {
 	history := limitedHistory(pkg.PyPIReleaseHistory, historyVersions)
 	counts := make([]int, 0, len(history))
 	for _, release := range history {
-		if len(release.Files) > 0 {
-			counts = append(counts, len(release.Files))
+		if len(release.Files) == 0 {
+			return len(pkg.PyPISelectedRelease.Files), 0
 		}
+		counts = append(counts, len(release.Files))
 	}
 	return len(pkg.PyPISelectedRelease.Files), medianInt(counts)
 }
 
+func missingHistoryFilesReason(history []report.PyPIReleaseInfo, metadata string) string {
+	for index, release := range history {
+		if len(release.Files) > 0 {
+			continue
+		}
+		if index == 0 {
+			return fmt.Sprintf("immediate previous PyPI release %s metadata is unavailable", metadata)
+		}
+		if release.Version != "" {
+			return fmt.Sprintf("PyPI release %s metadata is unavailable for historical version %s", metadata, release.Version)
+		}
+		return fmt.Sprintf("PyPI release %s metadata is unavailable within the configured history window", metadata)
+	}
+	return ""
+}
+
 type artifactShape struct {
-	hasSdist     bool
-	hasWheel     bool
-	packageTypes map[string]struct{}
-	wheelTags    map[string]struct{}
+	hasSdist       bool
+	hasWheel       bool
+	packageTypes   map[string]struct{}
+	wheelPlatforms map[string]struct{}
 }
 
 func releaseShape(release report.PyPIReleaseInfo) artifactShape {
 	shape := artifactShape{
-		packageTypes: make(map[string]struct{}),
-		wheelTags:    make(map[string]struct{}),
+		packageTypes:   make(map[string]struct{}),
+		wheelPlatforms: make(map[string]struct{}),
 	}
 	for _, file := range release.Files {
 		packageType := strings.TrimSpace(file.PackageType)
@@ -262,8 +381,8 @@ func releaseShape(release report.PyPIReleaseInfo) artifactShape {
 			shape.hasSdist = true
 		case "bdist_wheel":
 			shape.hasWheel = true
-			if tag := wheelTag(file.Filename); tag != "" {
-				shape.wheelTags[tag] = struct{}{}
+			for _, platform := range wheelPlatforms(file.Filename) {
+				shape.wheelPlatforms[platform] = struct{}{}
 			}
 		}
 	}
@@ -272,8 +391,8 @@ func releaseShape(release report.PyPIReleaseInfo) artifactShape {
 
 func historicalShape(history []report.PyPIReleaseInfo) artifactShape {
 	shape := artifactShape{
-		packageTypes: make(map[string]struct{}),
-		wheelTags:    make(map[string]struct{}),
+		packageTypes:   make(map[string]struct{}),
+		wheelPlatforms: make(map[string]struct{}),
 	}
 	for _, release := range history {
 		current := releaseShape(release)
@@ -282,32 +401,34 @@ func historicalShape(history []report.PyPIReleaseInfo) artifactShape {
 		for value := range current.packageTypes {
 			shape.packageTypes[value] = struct{}{}
 		}
-		for value := range current.wheelTags {
-			shape.wheelTags[value] = struct{}{}
+		for value := range current.wheelPlatforms {
+			shape.wheelPlatforms[value] = struct{}{}
 		}
 	}
 	return shape
 }
 
-func wheelTag(filename string) string {
+func wheelPlatforms(filename string) []string {
 	if !strings.HasSuffix(filename, ".whl") {
-		return ""
+		return nil
 	}
 	stem := strings.TrimSuffix(filename, ".whl")
 	parts := strings.Split(stem, "-")
 	if len(parts) < 5 {
-		return ""
+		return nil
 	}
-	tagParts := parts[len(parts)-3:]
-	return strings.Join(tagParts, "-")
+	return sortedUniqueStrings(strings.Split(parts[len(parts)-1], "."))
 }
 
-func totalSize(files []report.PyPIReleaseFile) int64 {
+func totalSize(files []report.PyPIReleaseFile) (int64, bool) {
 	var total int64
 	for _, file := range files {
+		if file.Size <= 0 || total > math.MaxInt64-file.Size {
+			return 0, false
+		}
 		total += file.Size
 	}
-	return total
+	return total, len(files) > 0
 }
 
 func largestSize(files []report.PyPIReleaseFile) int64 {
@@ -340,7 +461,7 @@ func medianInt64(values []int64) int64 {
 	if len(sorted)%2 == 1 {
 		return sorted[mid]
 	}
-	return (sorted[mid-1] + sorted[mid]) / 2
+	return sorted[mid-1] + (sorted[mid]-sorted[mid-1])/2
 }
 
 func medianInt(values []int) int {
@@ -353,7 +474,16 @@ func medianInt(values []int) int {
 	if len(sorted)%2 == 1 {
 		return sorted[mid]
 	}
-	return (sorted[mid-1] + sorted[mid]) / 2
+	return sorted[mid-1] + (sorted[mid]-sorted[mid-1])/2
+}
+
+func increaseAtLeastPercent(current, baseline int64, percent int) bool {
+	if current <= 0 || baseline <= 0 || current < baseline || percent <= 0 {
+		return false
+	}
+	left := new(big.Int).Mul(big.NewInt(current-baseline), big.NewInt(100))
+	right := new(big.Int).Mul(big.NewInt(baseline), new(big.Int).SetInt64(int64(percent)))
+	return left.Cmp(right) >= 0
 }
 
 func stringSet(values []string) map[string]struct{} {
@@ -375,6 +505,28 @@ func sortedDifference(left map[string]struct{}, right map[string]struct{}) []str
 		}
 	}
 	sort.Strings(result)
+	return result
+}
+
+func sortedIntersection(left map[string]struct{}, right map[string]struct{}) []string {
+	var result []string
+	for value := range left {
+		if _, ok := right[value]; ok {
+			result = append(result, value)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func unionSets(left map[string]struct{}, right map[string]struct{}) map[string]struct{} {
+	result := make(map[string]struct{}, len(left)+len(right))
+	for value := range left {
+		result[value] = struct{}{}
+	}
+	for value := range right {
+		result[value] = struct{}{}
+	}
 	return result
 }
 

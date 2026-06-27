@@ -122,6 +122,61 @@ func TestNormalizeRequirementsSeparatesOptionalExtras(t *testing.T) {
 	}
 }
 
+func TestDependenciesKnownTreatsNullAsKnownEmptyUnlessDynamic(t *testing.T) {
+	if !dependenciesKnown(info{RequiresDist: nil}) {
+		t.Fatalf("null requires_dist without dynamic marker should be known empty")
+	}
+	if dependenciesKnown(info{RequiresDist: nil, Dynamic: []string{"Requires-Dist"}}) {
+		t.Fatalf("dynamic requires_dist should be unknown")
+	}
+}
+
+func TestReleaseHistorySkipsDependencyRequestsWhenDisabled(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		t.Fatalf("unexpected dependency metadata request: %s", r.URL.Path)
+	}))
+	defer server.Close()
+
+	history := releaseHistory(context.Background(), server.Client(), "pkg", map[string][]release{
+		"1.0.0": {{Filename: "pkg-1.0.0.tar.gz", PackageType: "sdist"}},
+	}, []releaseHistoryEntry{{version: "1.0.0", publishedAt: "2026-01-01T00:00:00Z"}}, 1, false)
+
+	if requests.Load() != 0 || len(history) != 1 || history[0].DependenciesKnown {
+		t.Fatalf("requests = %d history = %+v, want artifact history without dependency fetch", requests.Load(), history)
+	}
+}
+
+func TestReleaseHistoryFetchesOnlyImmediatePreviousDependencies(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.URL.Path != "/pkg/2.0.0/json" {
+			t.Fatalf("unexpected dependency metadata request: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"info":{"requires_dist":[]}}`))
+	}))
+	defer server.Close()
+
+	oldBase := BaseURL
+	BaseURL = server.URL
+	defer func() { BaseURL = oldBase }()
+
+	history := releaseHistory(context.Background(), server.Client(), "pkg", map[string][]release{
+		"2.0.0": {{Filename: "pkg-2.0.0.tar.gz", PackageType: "sdist"}},
+		"1.0.0": {{Filename: "pkg-1.0.0.tar.gz", PackageType: "sdist"}},
+	}, []releaseHistoryEntry{
+		{version: "2.0.0", publishedAt: "2026-02-01T00:00:00Z"},
+		{version: "1.0.0", publishedAt: "2026-01-01T00:00:00Z"},
+	}, 2, true)
+
+	if requests.Load() != 1 || len(history) != 2 || !history[0].DependenciesKnown || history[1].DependenciesKnown {
+		t.Fatalf("requests = %d history = %+v, want only immediate previous dependencies fetched", requests.Load(), history)
+	}
+}
+
 func TestPrepareProvenanceFiltersInstallTargetFiles(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -157,7 +212,7 @@ func TestPrepareProvenanceFiltersInstallTargetFiles(t *testing.T) {
 	}
 }
 
-func TestPrepareProvenanceFallsBackToExplicitPlatform(t *testing.T) {
+func TestPrepareProvenanceMarksCompatibilityFailureWithoutGuessingWheels(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}))
@@ -176,11 +231,35 @@ func TestPrepareProvenanceFallsBackToExplicitPlatform(t *testing.T) {
 		},
 	})
 
-	if !summary.UsedFallback || !strings.Contains(warning, "using fallback platform") {
-		t.Fatalf("summary = %+v warning = %q, want visible fallback", summary, warning)
+	if summary.UsedFallback || summary.CompatibilityError == "" || !strings.Contains(warning, "cannot be confirmed") {
+		t.Fatalf("summary = %+v warning = %q, want visible compatibility failure", summary, warning)
 	}
-	if summary.CheckedCompatibleFiles != 3 || summary.SkippedNonTargetFiles != 1 {
-		t.Fatalf("summary = %+v, want explicit-platform filtering", summary)
+	if summary.CheckedCompatibleFiles != 1 || summary.SkippedNonTargetFiles != 3 {
+		t.Fatalf("summary = %+v, want only source distribution selected", summary)
+	}
+}
+
+func TestSelectPreferredArtifactUsesTagPriorityThenSdistFallback(t *testing.T) {
+	files := []report.PyPIReleaseFile{
+		{Filename: "pkg-1.0.0-cp311-cp311-win_amd64.whl", PackageType: "bdist_wheel", URL: "https://example/win", Digests: map[string]string{"sha256": "win"}},
+		{Filename: "pkg-1.0.0-py3-none-any.whl", PackageType: "bdist_wheel", URL: "https://example/any", Digests: map[string]string{"sha256": "any"}},
+		{Filename: "pkg-1.0.0.tar.gz", PackageType: "sdist", URL: "https://example/sdist", Digests: map[string]string{"sha256": "sdist"}},
+	}
+	options := Options{RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("Compatible tags: 2\n  py3-none-any\n  cp311-cp311-win_amd64\n"), nil
+	}}
+	candidate, err := selectPreferredArtifact(context.Background(), files, options)
+	if err != nil {
+		t.Fatalf("selectPreferredArtifact returned error: %v", err)
+	}
+	if candidate.Filename != "pkg-1.0.0-py3-none-any.whl" {
+		t.Fatalf("candidate = %+v, want highest-priority compatible wheel", candidate)
+	}
+
+	options.RunCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("missing") }
+	candidate, err = selectPreferredArtifact(context.Background(), files, options)
+	if err != nil || candidate.Filename != "pkg-1.0.0.tar.gz" {
+		t.Fatalf("candidate = %+v error = %v, want sdist fallback", candidate, err)
 	}
 }
 
@@ -312,8 +391,9 @@ func TestFetchMetadataWithArtifactOptions(t *testing.T) {
 	}()
 
 	report, err := NewWithOptions(server.Client(), Options{
-		HistoryVersions:  1,
-		ProvenanceScopes: []string{ProvenanceScopeAllArtifacts},
+		HistoryVersions:   1,
+		FetchDependencies: true,
+		ProvenanceScopes:  []string{ProvenanceScopeAllArtifacts},
 	}).FetchMetadata(context.Background(), ecosystem.PackageSpec{Name: "requests"})
 	if err != nil {
 		t.Fatalf("FetchMetadata returned error: %v", err)

@@ -95,8 +95,8 @@ func TestCheckHistoryChangesReportsChangedLifecycleScript(t *testing.T) {
 	}
 }
 
-func TestCheckHistoryChangesReportsUnknownHistory(t *testing.T) {
-	findings := CheckHistoryChanges(report.PackageReport{
+func TestHistoryIndeterminateReasonReportsUnknownImmediateHistory(t *testing.T) {
+	pkg := report.PackageReport{
 		Ecosystem: "npm",
 		LifecycleScripts: map[string]string{
 			"install": "node install.js",
@@ -104,20 +104,32 @@ func TestCheckHistoryChangesReportsUnknownHistory(t *testing.T) {
 		LifecycleHistory: []report.VersionLifecycleScripts{
 			{Version: "1.0.1", ScriptsKnown: false},
 		},
+	}
+
+	if reason := HistoryIndeterminateReason(pkg, 5); !strings.Contains(reason, "immediate previous") {
+		t.Fatalf("reason = %q, want immediate previous history reason", reason)
+	}
+}
+
+func TestCheckHistoryChangesReportsReintroducedLifecycleScript(t *testing.T) {
+	findings := CheckHistoryChanges(report.PackageReport{
+		Ecosystem:        "npm",
+		LifecycleScripts: map[string]string{"install": "node install.js"},
+		LifecycleHistory: []report.VersionLifecycleScripts{
+			{Version: "2.0.0", ScriptsKnown: true},
+			{Version: "1.0.0", ScriptsKnown: true, Scripts: map[string]string{"install": "node install.js"}},
+		},
 	}, 5)
 
-	if len(findings) != 1 {
-		t.Fatalf("findings = %+v, want 1 finding", findings)
-	}
-	if !strings.Contains(findings[0].Message, "history") || !strings.Contains(findings[0].Message, "incomplete") {
-		t.Fatalf("message = %q, want incomplete history finding", findings[0].Message)
+	if len(findings) != 1 || !strings.Contains(findings[0].Message, "reintroduces") {
+		t.Fatalf("findings = %+v, want reintroduced script finding", findings)
 	}
 }
 
 func TestCheckDormantAddedReportsLifecycleScriptAfterDormancy(t *testing.T) {
 	findings := CheckDormantAdded(report.PackageReport{
 		Ecosystem:           "npm",
-		SelectedPublishedAt:   "2026-05-27T12:00:00Z",
+		SelectedPublishedAt: "2026-05-27T12:00:00Z",
 		PreviousPublishedAt: "2025-01-01T12:00:00Z",
 		LifecycleScripts: map[string]string{
 			"postinstall": "node setup.js",
@@ -132,6 +144,37 @@ func TestCheckDormantAddedReportsLifecycleScriptAfterDormancy(t *testing.T) {
 	}
 	if !strings.Contains(findings[0].Message, "after 511 day(s)") {
 		t.Fatalf("message = %q, want dormant added finding", findings[0].Message)
+	}
+}
+
+func TestCheckDormantAddedReportsReintroducedLifecycleScript(t *testing.T) {
+	findings := CheckDormantAdded(report.PackageReport{
+		Ecosystem:           "npm",
+		SelectedPublishedAt: "2026-05-27T12:00:00Z",
+		PreviousPublishedAt: "2025-01-01T12:00:00Z",
+		LifecycleScripts:    map[string]string{"postinstall": "node setup.js"},
+		LifecycleHistory: []report.VersionLifecycleScripts{
+			{Version: "2.0.0", ScriptsKnown: true},
+			{Version: "1.0.0", ScriptsKnown: true, Scripts: map[string]string{"postinstall": "node old.js"}},
+		},
+	}, 5, 180)
+
+	if len(findings) != 1 || !strings.Contains(findings[0].Message, "reintroduces") {
+		t.Fatalf("findings = %+v, want dormant reintroduction finding", findings)
+	}
+}
+
+func TestDormantAddedIndeterminateReasonOnlyWhenReleaseIsDormant(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem:           "npm",
+		SelectedPublishedAt: "2026-05-27T12:00:00Z",
+		PreviousPublishedAt: "2026-05-26T12:00:00Z",
+		LifecycleScripts:    map[string]string{"postinstall": "node setup.js"},
+		LifecycleHistory:    []report.VersionLifecycleScripts{{Version: "1.0.0", ScriptsKnown: false}},
+	}
+
+	if reason := DormantAddedIndeterminateReason(pkg, 5, 180); reason != "" {
+		t.Fatalf("reason = %q, want no indeterminate reason for non-dormant release", reason)
 	}
 }
 

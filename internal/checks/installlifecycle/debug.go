@@ -54,14 +54,18 @@ func HistoryEvidence(pkg report.PackageReport, historyVersions int) []string {
 	}
 
 	for _, name := range names {
-		result := scriptHistory(pkg, name, historyVersions)
+		result := compareImmediateScript(pkg, name, historyVersions)
 		switch {
-		case result.found:
-			evidence = append(evidence, fmt.Sprintf("lifecycle script %s previously found in version %s", name, result.previousVersion))
-		case result.unknown:
-			evidence = append(evidence, fmt.Sprintf("lifecycle script %s history incomplete after %d compared version(s)", name, result.compared))
+		case !result.hasPrevious:
+			evidence = append(evidence, fmt.Sprintf("lifecycle script %s has no previous release to compare", name))
+		case !result.previousKnown:
+			evidence = append(evidence, fmt.Sprintf("lifecycle script %s immediate previous release metadata is unknown", name))
+		case result.previousHasScript:
+			evidence = append(evidence, fmt.Sprintf("lifecycle script %s present in immediate previous version %s", name, result.previousVersion))
+		case result.olderHasScript:
+			evidence = append(evidence, fmt.Sprintf("lifecycle script %s absent from immediate previous version %s and present in older version %s", name, result.previousVersion, result.olderVersion))
 		default:
-			evidence = append(evidence, fmt.Sprintf("lifecycle script %s absent from %d compared version(s)", name, result.compared))
+			evidence = append(evidence, fmt.Sprintf("lifecycle script %s absent from immediate previous version %s and older compared history", name, result.previousVersion))
 		}
 	}
 	return evidence

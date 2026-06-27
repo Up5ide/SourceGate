@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -167,7 +168,7 @@ func TestLoadMissingFileReturnsDefaultConfig(t *testing.T) {
 
 func TestLoadAcceptsFalseForIntegerAndMapOptions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sourcegate.config.json")
-	if err := os.WriteFile(path, []byte(`{
+	if err := os.WriteFile(path, completeConfigJSON(t, `{
 		"policy": {
 			"alert": {
 				"minimum_days_since_latest_release": false,
@@ -222,7 +223,7 @@ func TestLoadRejectsInvalidProtectedNameConfig(t *testing.T) {
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "sourcegate.config.json")
-			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			if err := os.WriteFile(path, completeConfigJSON(t, content), 0600); err != nil {
 				t.Fatalf("write config: %v", err)
 			}
 
@@ -248,7 +249,7 @@ func TestLoadRejectsInvalidFlexiblePolicyValueTypes(t *testing.T) {
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "sourcegate.config.json")
-			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			if err := os.WriteFile(path, completeConfigJSON(t, content), 0600); err != nil {
 				t.Fatalf("write config: %v", err)
 			}
 
@@ -269,7 +270,7 @@ func TestLoadRejectsContradictoryPyPIProvenanceScope(t *testing.T) {
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "sourcegate.config.json")
-			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			if err := os.WriteFile(path, completeConfigJSON(t, content), 0600); err != nil {
 				t.Fatalf("write config: %v", err)
 			}
 			if _, err := Load(path); err == nil {
@@ -288,7 +289,7 @@ func TestLoadRejectsInvalidPyPIRuntime(t *testing.T) {
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "sourcegate.config.json")
-			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			if err := os.WriteFile(path, completeConfigJSON(t, content), 0600); err != nil {
 				t.Fatalf("write config: %v", err)
 			}
 			if _, err := Load(path); err == nil {
@@ -310,7 +311,7 @@ func TestLoadRejectsNegativeTierThresholds(t *testing.T) {
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "sourcegate.config.json")
-			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			if err := os.WriteFile(path, completeConfigJSON(t, content), 0600); err != nil {
 				t.Fatalf("write config: %v", err)
 			}
 
@@ -333,5 +334,99 @@ func TestLoadRejectsOldFlatPolicyShape(t *testing.T) {
 
 	if _, err := Load(path); err == nil {
 		t.Fatalf("Load returned nil error")
+	}
+}
+
+func TestLoadRequiresCompletePolicyConfig(t *testing.T) {
+	cases := map[string]string{
+		"missing policy": `{"pypi_runtime":{}}`,
+		"missing tier":   `{"policy":{"inform":{},"alert":{}}}`,
+		"missing key":    `{"policy":{"inform":{},"alert":{},"block":{}}}`,
+	}
+
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sourcegate.config.json")
+			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatalf("Load returned nil error")
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsUTF8BOMAndRejectsTrailingJSON(t *testing.T) {
+	valid := completeConfigJSON(t, `{}`)
+	path := filepath.Join(t.TempDir(), "sourcegate.config.json")
+	if err := os.WriteFile(path, append([]byte{0xEF, 0xBB, 0xBF}, valid...), 0600); err != nil {
+		t.Fatalf("write BOM config: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load BOM config returned error: %v", err)
+	}
+
+	if err := os.WriteFile(path, append(valid, []byte(` {"extra":true}`)...), 0600); err != nil {
+		t.Fatalf("write trailing config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatalf("Load trailing config returned nil error")
+	}
+}
+
+func TestLoadRejectsMissingSameTierCompanionOptions(t *testing.T) {
+	cases := map[string]string{
+		"dormant script history":          `{"policy":{"alert":{"install_script_added_after_dormancy":true,"dormant_release_threshold_days":180,"install_lifecycle_history_versions":false}}}`,
+		"dormant script threshold":        `{"policy":{"alert":{"install_script_added_after_dormancy":true,"dormant_release_threshold_days":false,"install_lifecycle_history_versions":5}}}`,
+		"PyPI shape history":              `{"policy":{"alert":{"pypi_artifact_shape_change":true,"pypi_artifact_history_versions":false}}}`,
+		"PyPI optional dependency parent": `{"policy":{"alert":{"pypi_include_optional_dependencies":true,"pypi_dependency_change":false}}}`,
+		"orphan PyPI history":             `{"policy":{"alert":{"pypi_artifact_history_versions":5}}}`,
+	}
+
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sourcegate.config.json")
+			if err := os.WriteFile(path, completeConfigJSON(t, content), 0600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatalf("Load returned nil error")
+			}
+		})
+	}
+}
+
+func completeConfigJSON(t *testing.T, override string) []byte {
+	t.Helper()
+	base, err := json.Marshal(Config{Policy: PolicyConfig{}})
+	if err != nil {
+		t.Fatalf("marshal base config: %v", err)
+	}
+	var baseValue map[string]any
+	var overrideValue map[string]any
+	if err := json.Unmarshal(base, &baseValue); err != nil {
+		t.Fatalf("decode base config: %v", err)
+	}
+	if err := json.Unmarshal([]byte(override), &overrideValue); err != nil {
+		t.Fatalf("decode override config: %v", err)
+	}
+	mergeJSONMaps(baseValue, overrideValue)
+	result, err := json.Marshal(baseValue)
+	if err != nil {
+		t.Fatalf("marshal complete config: %v", err)
+	}
+	return result
+}
+
+func mergeJSONMaps(target, override map[string]any) {
+	for key, value := range override {
+		overrideMap, overrideOK := value.(map[string]any)
+		targetMap, targetOK := target[key].(map[string]any)
+		if overrideOK && targetOK {
+			mergeJSONMaps(targetMap, overrideMap)
+			continue
+		}
+		target[key] = value
 	}
 }

@@ -3,6 +3,8 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -133,15 +135,18 @@ func TestRunDebugDoesNotChangePyPIFetchBehavior(t *testing.T) {
 		t.Fatalf("Getwd returned error: %v", err)
 	}
 	tempDirectory := t.TempDir()
-	if err := os.WriteFile(filepath.Join(tempDirectory, config.DefaultPath), []byte(`{
-		"policy": {
-			"alert": {
-				"pypi_artifact_history_versions": 1,
-				"pypi_provenance_required": true,
-				"pypi_provenance_scope": "install-target"
-			}
-		}
-	}`), 0600); err != nil {
+	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{
+		Alert: config.PolicyTierConfig{
+			PyPIArtifactHistoryVersions: 1,
+			PyPIArtifactShapeChange:     true,
+			PyPIProvenanceRequired:      true,
+			PyPIProvenanceScope:         "install-target",
+		},
+	}})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDirectory, config.DefaultPath), configData, 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	if err := os.Chdir(tempDirectory); err != nil {
@@ -172,6 +177,112 @@ func TestRunDebugDoesNotChangePyPIFetchBehavior(t *testing.T) {
 	}
 	if !strings.Contains(debugOutput.String(), "Debug Evaluation Trace:") {
 		t.Fatalf("debug output missing trace:\n%s", debugOutput.String())
+	}
+}
+
+func TestRunInspectDownloadsVerifiedArtifactAndDeletesTempFile(t *testing.T) {
+	content := []byte("npm artifact")
+	sum := sha512.Sum512(content)
+	var artifactRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/lodash":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"name": "lodash",
+				"dist-tags": {"latest": "4.17.21"},
+				"time": {"4.17.21": "2021-02-20T15:42:16.891Z"},
+				"versions": {"4.17.21": {"dist": {
+					"tarball": "` + serverURLPlaceholder + `/artifact.tgz",
+					"integrity": "sha512-` + base64.StdEncoding.EncodeToString(sum[:]) + `"
+				}}}
+			}`))
+		case "/artifact.tgz":
+			artifactRequests++
+			w.Write(content)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	tempDirectory := t.TempDir()
+	t.Setenv("TMP", tempDirectory)
+	t.Setenv("TEMP", tempDirectory)
+	withWorkingDirectory(t, t.TempDir())
+
+	if result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"npm", "install", "lodash"}); err != nil {
+		t.Fatalf("normal Run returned error: %v", err)
+	} else if artifactRequests != 0 || result.Report.ArtifactDownload != nil {
+		t.Fatalf("normal run artifact requests = %d summary = %+v, want metadata-only", artifactRequests, result.Report.ArtifactDownload)
+	}
+
+	var out bytes.Buffer
+	result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &out, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "lodash"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if artifactRequests != 1 || result.Report.ArtifactDownload == nil || result.Report.ArtifactDownload.Status != report.ArtifactDownloadStatusVerified {
+		t.Fatalf("artifact requests = %d summary = %+v, want verified download", artifactRequests, result.Report.ArtifactDownload)
+	}
+	if entries, err := os.ReadDir(tempDirectory); err != nil || len(entries) != 0 {
+		t.Fatalf("temporary directory entries = %v error = %v, want empty", entries, err)
+	}
+	if !strings.Contains(out.String(), "Status: DOWNLOADED_VERIFIED") {
+		t.Fatalf("output missing artifact status:\n%s", out.String())
+	}
+}
+
+func TestRunInspectSkipsArtifactDownloadWhenMetadataBlocks(t *testing.T) {
+	var artifactRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pkg":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"name": "pkg",
+				"dist-tags": {"latest": "1.0.0"},
+				"time": {"1.0.0": "2026-06-14T00:00:00Z"},
+				"versions": {"1.0.0": {"dist": {
+					"tarball": "https://example.invalid/artifact.tgz",
+					"integrity": "sha512-ZGVm"
+				}}}
+			}`))
+		case "/artifact.tgz":
+			artifactRequests++
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	workspace := t.TempDir()
+	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{
+		Block: config.PolicyTierConfig{MinimumDaysSinceLatestRelease: 365},
+	}})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, config.DefaultPath), configData, 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	withWorkingDirectory(t, workspace)
+
+	var out bytes.Buffer
+	result, err := New(server.Client(), &out, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if artifactRequests != 0 || result.Report.ArtifactDownload == nil || result.Report.ArtifactDownload.Status != report.ArtifactDownloadStatusSkippedBlocked {
+		t.Fatalf("artifact requests = %d summary = %+v, want blocked skip", artifactRequests, result.Report.ArtifactDownload)
 	}
 }
 
@@ -253,4 +364,61 @@ func TestPyPIProvenanceScopesReturnsEnabledTierUnion(t *testing.T) {
 	if len(scopes) != 2 {
 		t.Fatalf("scopes = %v, want two enabled scopes", scopes)
 	}
+}
+
+func TestPyPIDependencyHistoryEnabledOnlyWhenDependencyCheckConfigured(t *testing.T) {
+	if pypiDependencyHistoryEnabled(config.PolicyConfig{
+		Alert: config.PolicyTierConfig{PyPIArtifactShapeChange: true},
+	}) {
+		t.Fatalf("dependency history enabled for artifact-only policy")
+	}
+	if !pypiDependencyHistoryEnabled(config.PolicyConfig{
+		Block: config.PolicyTierConfig{PyPIDependencyChange: true},
+	}) {
+		t.Fatalf("dependency history disabled for dependency policy")
+	}
+}
+
+const serverURLPlaceholder = "http://sourcegate-test-server"
+
+func rewritePlaceholderClient(client *http.Client, serverURL string) *http.Client {
+	copy := *client
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	copy.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasPrefix(req.URL.String(), serverURLPlaceholder) {
+			rewritten, err := http.NewRequestWithContext(req.Context(), req.Method, strings.Replace(req.URL.String(), serverURLPlaceholder, serverURL, 1), req.Body)
+			if err != nil {
+				return nil, err
+			}
+			rewritten.Header = req.Header.Clone()
+			req = rewritten
+		}
+		return transport.RoundTrip(req)
+	})
+	return &copy
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func withWorkingDirectory(t *testing.T, directory string) {
+	t.Helper()
+	oldWorkingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd returned error: %v", err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatalf("Chdir returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldWorkingDirectory); err != nil {
+			t.Fatalf("restore working directory: %v", err)
+		}
+	})
 }

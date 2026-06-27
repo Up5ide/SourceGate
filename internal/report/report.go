@@ -13,6 +13,30 @@ type Finding struct {
 	Message  string `json:"message"`
 }
 
+const (
+	ArtifactDownloadStatusVerified       = "DOWNLOADED_VERIFIED"
+	ArtifactDownloadStatusSkippedBlocked = "SKIPPED_BLOCKED"
+)
+
+type ArtifactCandidate struct {
+	SelectionError  string `json:"-"`
+	URL             string `json:"-"`
+	Filename        string `json:"-"`
+	PackageType     string `json:"-"`
+	ExpectedSize    int64  `json:"-"`
+	DigestAlgorithm string `json:"-"`
+	DigestValue     string `json:"-"`
+}
+
+type ArtifactDownloadSummary struct {
+	Status          string `json:"status"`
+	Filename        string `json:"filename,omitempty"`
+	PackageType     string `json:"package_type,omitempty"`
+	DownloadedSize  int64  `json:"downloaded_size,omitempty"`
+	DigestAlgorithm string `json:"digest_algorithm,omitempty"`
+	DigestVerified  bool   `json:"digest_verified"`
+}
+
 type DebugTraceStatus string
 
 const (
@@ -47,6 +71,7 @@ type PyPIReleaseFile struct {
 	Digests             map[string]string `json:"digests"`
 	Yanked              bool              `json:"yanked"`
 	YankedReason        string            `json:"yanked_reason"`
+	URL                 string            `json:"-"`
 	ProvenanceChecked   bool              `json:"provenance_checked"`
 	ProvenanceAvailable bool              `json:"provenance_available"`
 	ProvenanceError     string            `json:"provenance_error"`
@@ -81,6 +106,7 @@ type PyPIProvenanceSummary struct {
 	CompatibleTagCount     int      `json:"compatible_tag_count"`
 	UsedFallback           bool     `json:"used_fallback"`
 	FallbackReason         string   `json:"fallback_reason"`
+	CompatibilityError     string   `json:"compatibility_error,omitempty"`
 	CheckedCompatibleFiles int      `json:"checked_compatible_files"`
 	SkippedNonTargetFiles  int      `json:"skipped_non_target_files"`
 }
@@ -112,4 +138,6 @@ type PackageReport struct {
 	Decision            Decision                  `json:"decision"`
 	Findings            []Finding                 `json:"findings"`
 	DebugTrace          []DebugTraceEntry         `json:"debug_trace,omitempty"`
+	ArtifactCandidate   ArtifactCandidate         `json:"-"`
+	ArtifactDownload    *ArtifactDownloadSummary  `json:"artifact_download,omitempty"`
 }
