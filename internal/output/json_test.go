@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/sourcegate/sourcegate/internal/report"
+	"github.com/sourcegate/sourcegate/internal/version"
 )
 
 func TestRenderJSONEmitsFullReportEnvelope(t *testing.T) {
@@ -31,11 +32,11 @@ func TestRenderJSONEmitsFullReportEnvelope(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
 		t.Fatalf("JSON did not decode: %v\n%s", err, buf.String())
 	}
-	if decoded["schema_version"] != JSONSchemaVersion {
-		t.Fatalf("schema_version = %v, want %s", decoded["schema_version"], JSONSchemaVersion)
+	if decoded["schema_version"] != version.Current {
+		t.Fatalf("schema_version = %v, want %s", decoded["schema_version"], version.Current)
 	}
-	if decoded["sourcegate_version"] == "" {
-		t.Fatalf("sourcegate_version missing: %v", decoded)
+	if decoded["sourcegate_version"] != decoded["schema_version"] {
+		t.Fatalf("sourcegate_version = %v schema_version = %v, want matching versions", decoded["sourcegate_version"], decoded["schema_version"])
 	}
 	if decoded["install_executed"] != false {
 		t.Fatalf("install_executed = %v, want false", decoded["install_executed"])
@@ -87,6 +88,10 @@ func TestRenderJSONIncludesArtifactSummaryButNotInternalCandidate(t *testing.T) 
 			SuspiciousFileTypeExamples: []report.ArtifactSuspiciousFileType{
 				{Type: "python_native_extension", Path: "pkg/native.pyd", Reason: "extension", Detail: ".pyd"},
 			},
+			BehaviorIndicatorCount: 1,
+			BehaviorIndicatorExamples: []report.ArtifactBehaviorIndicator{
+				{Type: "download_execute", Path: "pkg/install.sh", Reason: "pattern", Detail: "curl or wget piped to shell"},
+			},
 		},
 	})
 	if err != nil {
@@ -98,6 +103,8 @@ func TestRenderJSONIncludesArtifactSummaryButNotInternalCandidate(t *testing.T) 
 		!strings.Contains(buf.String(), "\"pypi_build_file\"") ||
 		!strings.Contains(buf.String(), "\"suspicious_file_type_examples\"") ||
 		!strings.Contains(buf.String(), "\"python_native_extension\"") ||
+		!strings.Contains(buf.String(), "\"behavior_indicator_examples\"") ||
+		!strings.Contains(buf.String(), "\"download_execute\"") ||
 		strings.Contains(buf.String(), "secret.example") ||
 		strings.Contains(buf.String(), "artifact_candidate") {
 		t.Fatalf("JSON artifact fields incorrect:\n%s", buf.String())

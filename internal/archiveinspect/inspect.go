@@ -11,9 +11,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/sourcegate/sourcegate/internal/report"
 )
@@ -21,9 +23,12 @@ import (
 const minExpansionRatioBytes int64 = 10 * 1024 * 1024
 const maxMetadataFileBytes int64 = 256 * 1024
 const maxMetadataTotalBytes int64 = 1024 * 1024
+const maxBehaviorFileBytes int64 = 128 * 1024
+const maxBehaviorTotalBytes int64 = 2 * 1024 * 1024
 const maxMagicBytes int64 = 8
 const maxExecutionSurfaceExamples = 12
 const maxSuspiciousFileTypeExamples = 12
+const maxBehaviorIndicatorExamples = 12
 
 func Inspect(artifactPath, filename string) (report.ArtifactInspectionSummary, error) {
 	stat, err := os.Stat(artifactPath)
@@ -42,7 +47,8 @@ func Inspect(artifactPath, filename string) (report.ArtifactInspectionSummary, e
 			ArchiveFormat:   format,
 			CompressedBytes: stat.Size(),
 		},
-		seen: make(map[string]struct{}),
+		seen:         make(map[string]struct{}),
+		behaviorSeen: make(map[string]struct{}),
 	}
 
 	switch format {
@@ -73,6 +79,8 @@ type archiveInspector struct {
 	unsafeCount       int
 	unsafeExamples    []string
 	metadataBytesRead int64
+	behaviorBytesRead int64
+	behaviorSeen      map[string]struct{}
 }
 
 func (inspector *archiveInspector) inspectTarGzip(artifactPath string) error {
@@ -144,6 +152,18 @@ func (inspector *archiveInspector) recordTarEntry(header *tar.Header, reader *ta
 			inspector.metadataBytesRead += int64(len(content))
 			inspector.inspectSuspiciousFileType(normalized, content)
 			inspector.inspectMetadataExecutionSurfaces(normalized, content)
+			if inspector.shouldReadBehavior(normalized, int64(len(content))) {
+				inspector.behaviorBytesRead += int64(len(content))
+				inspector.inspectBehaviorIndicators(normalized, content)
+			}
+		} else if inspector.shouldReadBehavior(normalized, header.Size) {
+			content, err := readTarBehaviorContent(reader, header.Size)
+			if err != nil {
+				return err
+			}
+			inspector.behaviorBytesRead += int64(len(content))
+			inspector.inspectSuspiciousFileType(normalized, content)
+			inspector.inspectBehaviorIndicators(normalized, content)
 		} else {
 			prefix, err := readTarPrefix(reader, header.Size)
 			if err != nil {
@@ -185,6 +205,26 @@ func (inspector *archiveInspector) recordZipEntry(file *zip.File) error {
 			inspector.metadataBytesRead += int64(len(content))
 			inspector.inspectSuspiciousFileType(normalized, content)
 			inspector.inspectMetadataExecutionSurfaces(normalized, content)
+			if inspector.shouldReadBehavior(normalized, int64(len(content))) {
+				inspector.behaviorBytesRead += int64(len(content))
+				inspector.inspectBehaviorIndicators(normalized, content)
+			}
+		} else if inspector.shouldReadBehavior(normalized, uintToInt64(file.UncompressedSize64)) {
+			content, err := readZipBehaviorContent(file)
+			if err != nil {
+				return err
+			}
+			if len(content) > 0 {
+				inspector.behaviorBytesRead += int64(len(content))
+				inspector.inspectSuspiciousFileType(normalized, content)
+				inspector.inspectBehaviorIndicators(normalized, content)
+			} else {
+				prefix, err := readZipPrefix(file)
+				if err != nil {
+					return err
+				}
+				inspector.inspectSuspiciousFileType(normalized, prefix)
+			}
 		} else {
 			prefix, err := readZipPrefix(file)
 			if err != nil {
@@ -252,6 +292,21 @@ func (inspector *archiveInspector) addSuspiciousFileType(fileType report.Artifac
 	}
 }
 
+func (inspector *archiveInspector) addBehaviorIndicator(indicator report.ArtifactBehaviorIndicator) {
+	indicator.Path = displayPath(indicator.Path)
+	indicator.Reason = displayText(indicator.Reason)
+	indicator.Detail = displayText(indicator.Detail)
+	key := strings.Join([]string{indicator.Path, indicator.Type, indicator.Detail}, "\x00")
+	if _, exists := inspector.behaviorSeen[key]; exists {
+		return
+	}
+	inspector.behaviorSeen[key] = struct{}{}
+	inspector.summary.BehaviorIndicatorCount++
+	if len(inspector.summary.BehaviorIndicatorExamples) < maxBehaviorIndicatorExamples {
+		inspector.summary.BehaviorIndicatorExamples = append(inspector.summary.BehaviorIndicatorExamples, indicator)
+	}
+}
+
 func (inspector *archiveInspector) inspectPathExecutionSurfaces(normalized string) {
 	if normalized == "" {
 		return
@@ -283,6 +338,23 @@ func (inspector *archiveInspector) inspectSuspiciousFileType(normalized string, 
 	}
 	if fileType, ok := classifySuspiciousFileType(normalized, prefix); ok {
 		inspector.addSuspiciousFileType(fileType)
+	}
+}
+
+func (inspector *archiveInspector) inspectBehaviorIndicators(normalized string, content []byte) {
+	if normalized == "" || len(content) == 0 || looksBinaryContent(content) {
+		return
+	}
+	text := string(content)
+	for _, rule := range behaviorIndicatorRules {
+		if rule.pattern.MatchString(text) {
+			inspector.addBehaviorIndicator(report.ArtifactBehaviorIndicator{
+				Type:   rule.kind,
+				Path:   normalized,
+				Reason: rule.reason,
+				Detail: rule.detail,
+			})
+		}
 	}
 }
 
@@ -419,6 +491,16 @@ func (inspector *archiveInspector) shouldReadMetadata(normalized string, size in
 	}
 	base := strings.ToLower(path.Base(normalized))
 	return base == "package.json" || base == "pyproject.toml" || base == "entry_points.txt"
+}
+
+func (inspector *archiveInspector) shouldReadBehavior(normalized string, size int64) bool {
+	if normalized == "" || size <= 0 || size > maxBehaviorFileBytes || isNestedArchive(normalized) {
+		return false
+	}
+	if inspector.behaviorBytesRead > maxBehaviorTotalBytes-size {
+		return false
+	}
+	return isBehaviorScanCandidate(normalized)
 }
 
 func (inspector *archiveInspector) addUncompressedBytes(size int64) {
@@ -560,11 +642,159 @@ func isScriptFile(lowerName string) bool {
 		strings.HasSuffix(lowerName, ".ps1")
 }
 
+func isBehaviorScanCandidate(name string) bool {
+	lower := strings.ToLower(name)
+	base := path.Base(lower)
+	if _, ok := behaviorScanBaseNames[base]; ok {
+		return true
+	}
+	extension := path.Ext(base)
+	_, ok := behaviorScanExtensions[extension]
+	return ok
+}
+
+func looksBinaryContent(content []byte) bool {
+	if len(content) == 0 {
+		return false
+	}
+	for _, value := range content {
+		if value == 0 {
+			return true
+		}
+	}
+	if !utf8.Valid(content) {
+		return true
+	}
+	var controls int
+	for _, value := range content {
+		if value < 0x20 && value != '\n' && value != '\r' && value != '\t' && value != '\f' {
+			controls++
+		}
+	}
+	return controls*100/len(content) > 30
+}
+
 func classifySuspiciousFileType(normalized string, prefix []byte) (report.ArtifactSuspiciousFileType, bool) {
 	if fileType, ok := suspiciousFileTypeByMagic(normalized, prefix); ok {
 		return fileType, true
 	}
 	return suspiciousFileTypeByExtension(normalized)
+}
+
+type behaviorIndicatorRule struct {
+	kind    string
+	reason  string
+	detail  string
+	pattern *regexp.Regexp
+}
+
+var behaviorScanExtensions = map[string]struct{}{
+	".bash": {},
+	".bat":  {},
+	".cfg":  {},
+	".cjs":  {},
+	".cmd":  {},
+	".conf": {},
+	".css":  {},
+	".env":  {},
+	".fish": {},
+	".htm":  {},
+	".html": {},
+	".ini":  {},
+	".js":   {},
+	".json": {},
+	".jsx":  {},
+	".lock": {},
+	".md":   {},
+	".mjs":  {},
+	".ps1":  {},
+	".py":   {},
+	".pyw":  {},
+	".rst":  {},
+	".sh":   {},
+	".toml": {},
+	".ts":   {},
+	".tsx":  {},
+	".txt":  {},
+	".xml":  {},
+	".yaml": {},
+	".yml":  {},
+	".zsh":  {},
+}
+
+var behaviorScanBaseNames = map[string]struct{}{
+	".env":             {},
+	".npmrc":           {},
+	".pypirc":          {},
+	"cmakelists.txt":   {},
+	"configure":        {},
+	"dockerfile":       {},
+	"makefile":         {},
+	"package.json":     {},
+	"pipfile":          {},
+	"pipfile.lock":     {},
+	"pyproject.toml":   {},
+	"requirements.in":  {},
+	"requirements.txt": {},
+	"setup.cfg":        {},
+	"setup.py":         {},
+}
+
+var behaviorIndicatorRules = []behaviorIndicatorRule{
+	{
+		kind:    "download_execute",
+		reason:  "pattern",
+		detail:  "curl or wget piped to shell",
+		pattern: regexp.MustCompile(`(?i)\b(curl|wget)\b[^\r\n|;&]{0,200}\|\s*(sh|bash|zsh|dash|powershell|pwsh)\b`),
+	},
+	{
+		kind:    "download_execute",
+		reason:  "pattern",
+		detail:  "PowerShell web request piped to expression execution",
+		pattern: regexp.MustCompile(`(?i)\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\r\n|;&]{0,200}\|\s*(iex|invoke-expression)\b`),
+	},
+	{
+		kind:    "powershell_download_execute",
+		reason:  "pattern",
+		detail:  "PowerShell download followed by execution",
+		pattern: regexp.MustCompile(`(?is)(downloadstring|downloadfile|net\.webclient|invoke-webrequest|invoke-restmethod).{0,200}(iex|invoke-expression|start-process|powershell|pwsh)`),
+	},
+	{
+		kind:    "process_execution_api",
+		reason:  "token",
+		detail:  "Node child_process execution API",
+		pattern: regexp.MustCompile(`(?i)(require\s*\(\s*['"]child_process['"]\s*\)|node:child_process|child_process\.(exec|execsync|spawn|spawnsync))`),
+	},
+	{
+		kind:    "process_execution_api",
+		reason:  "token",
+		detail:  "Python subprocess or os execution API",
+		pattern: regexp.MustCompile(`(?i)\b(subprocess\.(popen|run|call|check_output)|os\.(system|popen|spawn\w*)\s*\()`),
+	},
+	{
+		kind:    "credential_access",
+		reason:  "token",
+		detail:  "credential environment variable name",
+		pattern: regexp.MustCompile(`(?i)\b(AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|GITHUB_TOKEN|NPM_TOKEN|PYPI_TOKEN|TWINE_PASSWORD|SSH_PRIVATE_KEY|PRIVATE_KEY|ACCESS_TOKEN)\b`),
+	},
+	{
+		kind:    "environment_access",
+		reason:  "token",
+		detail:  "environment variable access",
+		pattern: regexp.MustCompile(`(?i)(process\.env|os\.environ|getenv\s*\()`),
+	},
+	{
+		kind:    "cloud_metadata",
+		reason:  "endpoint",
+		detail:  "cloud instance metadata endpoint",
+		pattern: regexp.MustCompile(`(?i)(169\.254\.169\.254|169\.254\.170\.2|metadata\.google\.internal|100\.100\.100\.200)`),
+	},
+	{
+		kind:    "obfuscation_execution",
+		reason:  "pattern",
+		detail:  "decoded string execution",
+		pattern: regexp.MustCompile(`(?i)(eval\s*\(\s*atob\s*\(|eval\s*\(\s*buffer\.from\s*\(|exec\s*\(\s*buffer\.from\s*\(|eval\s*\(\s*base64\.b64decode\s*\(|exec\s*\(\s*base64\.b64decode\s*\()`),
+	},
 }
 
 func suspiciousFileTypeByMagic(normalized string, prefix []byte) (report.ArtifactSuspiciousFileType, bool) {
@@ -682,6 +912,17 @@ func readTarPrefix(reader *tar.Reader, size int64) ([]byte, error) {
 	return content, nil
 }
 
+func readTarBehaviorContent(reader *tar.Reader, size int64) ([]byte, error) {
+	content, err := io.ReadAll(io.LimitReader(reader, size))
+	if err != nil {
+		return nil, fmt.Errorf("inspect tar.gz artifact: read behavior scan file: %w", err)
+	}
+	if int64(len(content)) != size {
+		return nil, fmt.Errorf("inspect tar.gz artifact: behavior scan file ended early")
+	}
+	return content, nil
+}
+
 func readZipMetadata(file *zip.File) ([]byte, error) {
 	reader, err := file.Open()
 	if err != nil {
@@ -694,6 +935,22 @@ func readZipMetadata(file *zip.File) ([]byte, error) {
 	}
 	if int64(len(content)) > maxMetadataFileBytes {
 		return nil, fmt.Errorf("inspect zip artifact: metadata %s exceeds read limit", file.Name)
+	}
+	return content, nil
+}
+
+func readZipBehaviorContent(file *zip.File) ([]byte, error) {
+	reader, err := file.Open()
+	if err != nil {
+		return nil, fmt.Errorf("inspect zip artifact: open behavior scan file %s: %w", file.Name, err)
+	}
+	defer reader.Close()
+	content, err := io.ReadAll(io.LimitReader(reader, maxBehaviorFileBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("inspect zip artifact: read behavior scan file %s: %w", file.Name, err)
+	}
+	if int64(len(content)) > maxBehaviorFileBytes {
+		return nil, nil
 	}
 	return content, nil
 }

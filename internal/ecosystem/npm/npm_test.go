@@ -15,8 +15,8 @@ func TestFetchMetadata(t *testing.T) {
 		if r.URL.Path != "/lodash" {
 			t.Fatalf("path = %q, want /lodash", r.URL.Path)
 		}
-		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.7.2" {
-			t.Fatalf("user agent = %q, want sourcegate/0.7.2", got)
+		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.7.3" {
+			t.Fatalf("user agent = %q, want sourcegate/0.7.3", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{

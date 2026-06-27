@@ -363,6 +363,62 @@ func TestRunInspectAppliesExecutionSurfacePolicyFindings(t *testing.T) {
 	}
 }
 
+func TestRunInspectAppliesBehaviorIndicatorPolicyFindings(t *testing.T) {
+	content := testTarGzip(t, "package/index.js", []byte(`require("child_process").exec("whoami"); console.log(process.env.NPM_TOKEN);`))
+	sum := sha512.Sum512(content)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pkg":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"name": "pkg",
+				"dist-tags": {"latest": "1.0.0"},
+				"time": {"1.0.0": "2021-02-20T15:42:16.891Z"},
+				"versions": {"1.0.0": {"dist": {
+					"tarball": "` + serverURLPlaceholder + `/artifact.tgz",
+					"integrity": "sha512-` + base64.StdEncoding.EncodeToString(sum[:]) + `"
+				}}}
+			}`))
+		case "/artifact.tgz":
+			w.Write(content)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	workspace := t.TempDir()
+	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{
+		Alert: config.PolicyTierConfig{ArtifactBehaviorIndicators: true},
+	}})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, config.DefaultPath), configData, 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	withWorkingDirectory(t, workspace)
+
+	var out bytes.Buffer
+	result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &out, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitAlertFinding || result.Report.Decision != report.DecisionAllow {
+		t.Fatalf("exit = %d decision = %q, want alert allow", result.ExitCode, result.Report.Decision)
+	}
+	if result.Report.ArtifactInspection == nil || result.Report.ArtifactInspection.BehaviorIndicatorCount == 0 {
+		t.Fatalf("artifact inspection = %+v, want behavior indicators", result.Report.ArtifactInspection)
+	}
+	if !hasFindingContaining(result.Report.Findings, "behavior indicator") || !strings.Contains(out.String(), "Behavior Indicators:") {
+		t.Fatalf("findings = %+v output = %s, want behavior indicator finding and output", result.Report.Findings, out.String())
+	}
+}
+
 func TestRunInspectPyPISdistArtifact(t *testing.T) {
 	content := testTarGzip(t, "requests/__init__.py", []byte("python"))
 	sum := sha256.Sum256(content)

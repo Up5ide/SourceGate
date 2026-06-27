@@ -50,6 +50,7 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
       "artifact_max_expansion_ratio": false,
       "artifact_execution_surfaces": false,
       "artifact_suspicious_file_types": false,
+      "artifact_behavior_indicators": false,
       "protected_packages": false,
       "protected_tokens": false
     },
@@ -75,6 +76,7 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
       "artifact_max_expansion_ratio": false,
       "artifact_execution_surfaces": true,
       "artifact_suspicious_file_types": true,
+      "artifact_behavior_indicators": true,
       "protected_packages": {
         "npm": ["react", "lodash", "@tanstack/react-query"],
         "pypi": ["requests", "django"]
@@ -103,6 +105,7 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
       "artifact_max_expansion_ratio": 100,
       "artifact_execution_surfaces": false,
       "artifact_suspicious_file_types": false,
+      "artifact_behavior_indicators": false,
       "protected_packages": false,
       "protected_tokens": false
     }
@@ -141,6 +144,7 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 | `artifact_max_expansion_ratio` | integer or `false` | Maximum archive expansion ratio when ratio evaluation applies. |
 | `artifact_execution_surfaces` | boolean | `true` enables install/build execution-surface findings during `--inspect`. |
 | `artifact_suspicious_file_types` | boolean | `true` enables native/executable file type findings during `--inspect`. |
+| `artifact_behavior_indicators` | boolean | `true` enables suspicious behavior indicator findings during `--inspect`. |
 | `protected_packages` | map or `false` | Map keyed by ecosystem; `false` disables protected package checks for the tier. |
 | `protected_tokens` | map or `false` | Map keyed by ecosystem; `false` disables protected token checks for the tier. |
 
@@ -204,7 +208,9 @@ Supported archive formats are npm `.tgz` tarballs and PyPI `.whl`, `.zip`, `.tar
 
 `artifact_suspicious_file_types` emits findings when archive entries look like native/executable content by extension or bounded magic-byte inspection. It detects Windows PE files, ELF, Mach-O, WebAssembly modules, Java class bytecode, native extension files such as `.node` and `.pyd`, shared libraries, object/static libraries, and installer/package formats such as `.msi`, `.deb`, `.rpm`, `.apk`, `.dmg`, and `.pkg`. SourceGate reads only a small file prefix for magic signatures and reports at most one suspicious type per file, preferring magic-byte evidence over extension evidence.
 
-The checked-in defaults put hard archive safety limits in the `block` tier: unsafe paths are blocked, file count is limited to `20000`, uncompressed size to `1024` MiB, and expansion ratio to `100`. The checked-in default enables `artifact_execution_surfaces` and `artifact_suspicious_file_types` in the `alert` tier because these signals can be legitimate but are important to review. Users can move the same options to `inform` or `block`, or disable them, based on their tolerance.
+`artifact_behavior_indicators` emits findings when capped text/source files contain high-confidence suspicious behavior indicators. It detects download-and-execute shell patterns, PowerShell download/execute patterns, Node and Python process execution APIs, credential or environment variable access, cloud metadata endpoints, and decoded-string execution patterns. SourceGate scans only likely text/source/script/config files, skips binary-looking content and nested archives, caps each scanned file at 128 KiB, caps total behavior scanning at 2 MiB per artifact, reports at most one unique indicator per file/type/detail, and truncates displayed details.
+
+The checked-in defaults put hard archive safety limits in the `block` tier: unsafe paths are blocked, file count is limited to `20000`, uncompressed size to `1024` MiB, and expansion ratio to `100`. The checked-in default enables `artifact_execution_surfaces`, `artifact_suspicious_file_types`, and `artifact_behavior_indicators` in the `alert` tier because these signals can be legitimate but are important to review. Users can move the same options to `inform` or `block`, or disable them, based on their tolerance.
 
 ## Name Protection
 

@@ -4,11 +4,11 @@ SourceGate is a security-first Go CLI that sits in front of package managers and
 
 The long-term goal is to become a local, policy-driven enforcement layer for software supply-chain risk. SourceGate should help developers and CI systems identify risky packages, explain the reasons clearly, and eventually allow, warn, or block installation based on deterministic policy.
 
-## Version 0.7.2 Scope
+## Version 0.7.3 Scope
 
-Version 0.7.2 adds structured JSON output, CI-friendly exit codes, and an explicit bounded artifact-download, archive-safety, install/build execution-surface, and suspicious native/executable file type stage through `--inspect`.
+Version 0.7.3 adds structured JSON output, CI-friendly exit codes, and an explicit bounded artifact-download, archive-safety, install/build execution-surface, suspicious native/executable file type, and suspicious behavior-indicator stage through `--inspect`.
 
-SourceGate does not install packages or invoke the real package manager. Normal commands fetch public registry metadata only. `--inspect` additionally downloads one preferred install-target artifact into an OS temporary file, verifies its registry digest, inspects archive safety metadata, bounded install/build metadata, and native/executable file type signals without extraction, and deletes it before exit.
+SourceGate does not install packages or invoke the real package manager. Normal commands fetch public registry metadata only. `--inspect` additionally downloads one preferred install-target artifact into an OS temporary file, verifies its registry digest, inspects archive safety metadata, bounded install/build metadata, native/executable file type signals, and bounded suspicious behavior indicators without extraction, and deletes it before exit.
 
 Supported command shape:
 
@@ -35,7 +35,7 @@ Expected behavior:
 5. Exit with a deterministic status code for CI.
 6. Exit without installing the package.
 
-Global prefix options can be passed before the package manager. The optional `--debug` flag appends a concise evaluation trace to standard output. `--inspect` downloads, verifies, archive-inspects, and detects install/build execution surfaces plus suspicious native/executable file types in one preferred install-target artifact after metadata policy evaluation; a metadata `BLOCK` result skips the download. Use `--format json` for structured output. PyPI inspection also accepts `--python`, `--target-platform`, `--python-version`, `--implementation`, and repeatable `--abi` target overrides.
+Global prefix options can be passed before the package manager. The optional `--debug` flag appends a concise evaluation trace to standard output. `--inspect` downloads, verifies, archive-inspects, and detects install/build execution surfaces, suspicious native/executable file types, and suspicious behavior indicators in one preferred install-target artifact after metadata policy evaluation; a metadata `BLOCK` result skips the download. Use `--format json` for structured output. PyPI inspection also accepts `--python`, `--target-platform`, `--python-version`, `--implementation`, and repeatable `--abi` target overrides.
 
 ## Mission
 
@@ -74,11 +74,11 @@ Supported behavior:
 - Append a human-readable policy evaluation trace when `--debug` is provided before the package manager.
 - Check PyPI provenance for install-target artifacts by default when the configured policy requires provenance.
 - Print a warning and mark install-target provenance indeterminate when Python compatibility-tag inspection fails, without guessing compatible wheels.
-- With `--inspect`, download one preferred install-target artifact to a temporary file, enforce a 100 MiB limit, verify its registry digest, inspect archive inventory, hard archive safety issues, bounded install/build execution-surface metadata, and suspicious native/executable file type signals, report the result, and delete the file.
+- With `--inspect`, download one preferred install-target artifact to a temporary file, enforce a 100 MiB limit, verify its registry digest, inspect archive inventory, hard archive safety issues, bounded install/build execution-surface metadata, suspicious native/executable file type signals, and bounded suspicious behavior indicators, report the result, and delete the file.
 - Exit without installing the package.
 - Avoid invoking `npm`, package installation, or any package lifecycle hooks. PyPI install-target provenance inspection may run local `<python> -m pip debug --verbose` to discover compatibility tags.
 
-The current version does not extract package contents, scan source code broadly, or invoke package-manager install behavior. Archive inspection reads headers, bounded package metadata, and small file prefixes for native/executable magic signatures only.
+The current version does not extract package contents, scan source code broadly, or invoke package-manager install behavior. Archive inspection reads headers, bounded package metadata, small file prefixes for native/executable magic signatures, and capped text/source files for high-confidence suspicious behavior indicators only.
 
 ## Documentation
 
@@ -99,7 +99,7 @@ Later work:
 
 - Add typosquatting and dependency confusion checks.
 - Add upstream repository commit-time analysis where package metadata exposes a source repository.
-- Detect suspicious file paths, embedded binaries, obfuscated code, credential access, environment variable access, network indicators, and remote payload download behavior.
+- Broaden suspicious file path, binary, obfuscation, credential, environment, network, and remote payload indicators as confidence improves.
 - Add local policy configuration for allow, warn, and block decisions.
 
 ## Non-Goals

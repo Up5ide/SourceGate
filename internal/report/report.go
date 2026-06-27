@@ -52,6 +52,13 @@ type ArtifactSuspiciousFileType struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+type ArtifactBehaviorIndicator struct {
+	Type   string `json:"type"`
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+	Detail string `json:"detail,omitempty"`
+}
+
 type ArtifactInspectionSummary struct {
 	Status                     string                       `json:"status"`
 	ArchiveFormat              string                       `json:"archive_format"`
@@ -71,6 +78,8 @@ type ArtifactInspectionSummary struct {
 	ExecutionSurfaceExamples   []ArtifactExecutionSurface   `json:"execution_surface_examples,omitempty"`
 	SuspiciousFileTypeCount    int                          `json:"suspicious_file_type_count,omitempty"`
 	SuspiciousFileTypeExamples []ArtifactSuspiciousFileType `json:"suspicious_file_type_examples,omitempty"`
+	BehaviorIndicatorCount     int                          `json:"behavior_indicator_count,omitempty"`
+	BehaviorIndicatorExamples  []ArtifactBehaviorIndicator  `json:"behavior_indicator_examples,omitempty"`
 	ExpansionRatioApplicable   bool                         `json:"-"`
 }
 

@@ -633,6 +633,41 @@ func TestEvaluateArtifactInspectionAddsSuspiciousFileTypeFinding(t *testing.T) {
 	}
 }
 
+func TestEvaluateArtifactInspectionAddsBehaviorIndicatorFinding(t *testing.T) {
+	pkg := report.PackageReport{
+		Decision: report.DecisionAllow,
+		ArtifactInspection: &report.ArtifactInspectionSummary{
+			ArchiveFormat:          "tar.gz",
+			BehaviorIndicatorCount: 1,
+			BehaviorIndicatorExamples: []report.ArtifactBehaviorIndicator{
+				{Type: "download_execute", Path: "package/install.sh", Reason: "pattern", Detail: "curl or wget piped to shell"},
+			},
+		},
+	}
+	disabled := pkg
+	EvaluateArtifactInspection(&disabled, config.Config{}, EvaluationOptions{})
+	if len(disabled.Findings) != 0 || disabled.Decision != report.DecisionAllow {
+		t.Fatalf("disabled pkg = %+v, want no artifact behavior finding", disabled)
+	}
+
+	cfg := config.Config{Policy: config.PolicyConfig{
+		Inform: config.PolicyTierConfig{ArtifactBehaviorIndicators: true},
+		Alert:  config.PolicyTierConfig{ArtifactBehaviorIndicators: true},
+	}}
+	EvaluateArtifactInspection(&pkg, cfg, EvaluationOptions{Debug: true})
+
+	if pkg.Decision != report.DecisionAllow {
+		t.Fatalf("decision = %q, want ALLOW", pkg.Decision)
+	}
+	if len(pkg.Findings) != 1 || pkg.Findings[0].Severity != levelAlert || !strings.Contains(pkg.Findings[0].Message, "install.sh") {
+		t.Fatalf("findings = %+v, want strongest alert behavior indicator finding", pkg.Findings)
+	}
+	trace := findTrace(t, pkg.DebugTrace, "artifact_behavior_indicators")
+	if trace.Status != report.DebugTraceMatch || trace.Severity != levelAlert || !containsEvidence(trace, "download_execute") {
+		t.Fatalf("trace = %+v, want alert match with behavior evidence", trace)
+	}
+}
+
 func TestEvaluateArtifactInspectionLeavesMetadataOnlyEvaluationUnchanged(t *testing.T) {
 	pkg := report.PackageReport{}
 	cfg := config.Config{Policy: config.PolicyConfig{

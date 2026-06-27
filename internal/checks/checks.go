@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sourcegate/sourcegate/internal/checks/artifactbehavior"
 	"github.com/sourcegate/sourcegate/internal/checks/artifactexecution"
 	"github.com/sourcegate/sourcegate/internal/checks/artifactfiletypes"
 	"github.com/sourcegate/sourcegate/internal/checks/artifactsafety"
@@ -491,6 +492,22 @@ func EvaluateArtifactInspection(pkg *report.PackageReport, cfg config.Config, op
 			return artifactfiletypes.CheckSuspiciousFileTypes(*pkg)
 		},
 	})
+	evaluate(debugPolicyCheck{
+		id:         "artifact_behavior_indicators",
+		applicable: artifactApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.ArtifactBehaviorIndicators }),
+		evidence: func() []string {
+			return append(artifactbehavior.Evidence(*pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.ArtifactBehaviorIndicators
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !policy.ArtifactBehaviorIndicators {
+				return nil
+			}
+			return artifactbehavior.CheckBehaviorIndicators(*pkg)
+		},
+	})
 
 	if enabledPolicy {
 		if hasBlockFinding(pkg.Findings) {
@@ -645,7 +662,8 @@ func artifactPolicyEnabled(tiers []policyTier) bool {
 			policy.ArtifactMaxUncompressedSizeMB > 0 ||
 			policy.ArtifactMaxExpansionRatio > 0 ||
 			policy.ArtifactExecutionSurfaces ||
-			policy.ArtifactSuspiciousFileTypes
+			policy.ArtifactSuspiciousFileTypes ||
+			policy.ArtifactBehaviorIndicators
 	})
 }
 
@@ -790,6 +808,9 @@ func artifactPolicyTierSummary(policy config.PolicyTierConfig) string {
 	}
 	if policy.ArtifactSuspiciousFileTypes {
 		summaries = append(summaries, "artifact suspicious file type checks enabled")
+	}
+	if policy.ArtifactBehaviorIndicators {
+		summaries = append(summaries, "artifact behavior indicator checks enabled")
 	}
 	return joinPolicySummaries(summaries)
 }

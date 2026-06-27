@@ -8,8 +8,6 @@ import (
 	"github.com/sourcegate/sourcegate/internal/version"
 )
 
-const JSONSchemaVersion = "5"
-
 type JSONReport struct {
 	SchemaVersion     string               `json:"schema_version"`
 	SourceGateVersion string               `json:"sourcegate_version"`
@@ -21,7 +19,7 @@ func RenderJSON(w io.Writer, pkg report.PackageReport) error {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(JSONReport{
-		SchemaVersion:     JSONSchemaVersion,
+		SchemaVersion:     version.Current,
 		SourceGateVersion: version.Current,
 		InstallExecuted:   false,
 		Report:            pkg,

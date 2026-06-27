@@ -83,6 +83,10 @@ func RenderHuman(w io.Writer, pkg report.PackageReport) {
 		for _, fileType := range pkg.ArtifactInspection.SuspiciousFileTypeExamples {
 			fmt.Fprintf(w, "    - %s\n", suspiciousFileTypeDisplay(fileType))
 		}
+		fmt.Fprintf(w, "  Behavior Indicators: %d\n", pkg.ArtifactInspection.BehaviorIndicatorCount)
+		for _, indicator := range pkg.ArtifactInspection.BehaviorIndicatorExamples {
+			fmt.Fprintf(w, "    - %s\n", behaviorIndicatorDisplay(indicator))
+		}
 	}
 
 	fmt.Fprintln(w)
@@ -135,6 +139,14 @@ func suspiciousFileTypeDisplay(fileType report.ArtifactSuspiciousFileType) strin
 	parts := []string{fileType.Type, fileType.Path, fileType.Reason}
 	if strings.TrimSpace(fileType.Detail) != "" {
 		parts = append(parts, fileType.Detail)
+	}
+	return strings.Join(parts, " ")
+}
+
+func behaviorIndicatorDisplay(indicator report.ArtifactBehaviorIndicator) string {
+	parts := []string{indicator.Type, indicator.Path, indicator.Reason}
+	if strings.TrimSpace(indicator.Detail) != "" {
+		parts = append(parts, indicator.Detail)
 	}
 	return strings.Join(parts, " ")
 }
