@@ -12,7 +12,7 @@ The high-level flow is:
 4. `internal/ecosystem/npm` or `internal/ecosystem/pypi` selects either the requested exact version or the registry latest release and converts registry responses into a shared `report.PackageReport`.
 5. `internal/checks` evaluates configured policy tiers and appends findings to the report.
 6. When `--inspect` is set and metadata policy does not block, `internal/artifact` downloads one selected artifact into a temporary file, enforces limits, and verifies its digest.
-7. `internal/archiveinspect` reads the verified archive without extracting it, records inventory metrics, and detects hard archive safety issues.
+7. `internal/archiveinspect` reads the verified archive without extracting it, records inventory metrics, detects hard archive safety issues, and reads bounded package metadata for install/build execution surfaces.
 8. The temporary artifact is deleted before output or error return.
 9. `internal/output` renders either human output or a structured JSON envelope.
 10. `cmd/sourcegate` exits with a deterministic CI status code based on the highest finding severity.
@@ -64,7 +64,7 @@ Checks should read from `PackageReport` and return findings without performing p
 
 ## Output And Exit Codes
 
-Human output remains the default. `--format json` writes a pretty-printed JSON object with `schema_version`, `sourcegate_version`, `install_executed`, and the full evaluated package report. JSON schema version `2` added the optional `artifact_download` summary; schema version `3` adds the optional `artifact_inspection` summary.
+Human output remains the default. `--format json` writes a pretty-printed JSON object with `schema_version`, `sourcegate_version`, `install_executed`, and the full evaluated package report. JSON schema version `2` added the optional `artifact_download` summary; schema version `3` added the optional `artifact_inspection` summary; schema version `4` adds structured install/build execution-surface examples under artifact inspection.
 
 Operational and usage errors are written as plain text to stderr and do not emit partial JSON.
 
@@ -97,7 +97,7 @@ The policy model has three tiers:
 - `alert`
 - `block`
 
-`internal/checks` evaluates tiers from strongest to weakest for each check: `block`, then `alert`, then `inform`. If the same check matches multiple tiers, only the strongest matching tier is reported for that check. Archive safety checks run only after successful `--inspect` archive inspection.
+`internal/checks` evaluates tiers from strongest to weakest for each check: `block`, then `alert`, then `inform`. If the same check matches multiple tiers, only the strongest matching tier is reported for that check. Archive safety and execution-surface checks run only after successful `--inspect` archive inspection.
 
 The `block` tier sets the report decision to `BLOCK` and exits with code `30`. SourceGate still does not run or block a real package-manager install.
 
@@ -119,7 +119,7 @@ Current metadata checks are:
 - npm lifecycle script declaration, suspicious commands, history changes, and dormant script additions.
 - PyPI artifact shape, file size jump, dependency change, provenance availability, and release file count changes.
 
-`--inspect` also enables archive safety checks for unsafe archive paths, file-count limits, total uncompressed-size limits, and high expansion ratios.
+`--inspect` also enables archive safety checks for unsafe archive paths, file-count limits, total uncompressed-size limits, high expansion ratios, and install/build execution surfaces.
 
 Individual check packages determine whether a condition matches and provide the finding message. The tier runner assigns the final finding level: `INFORM`, `ALERT`, or `BLOCK`.
 
@@ -129,9 +129,9 @@ Normal commands remain metadata-only. `--inspect` selects the npm tarball or the
 
 Downloads stream to a mode-`0600` OS temporary file, are limited to 100 MiB, require a trusted SHA-256 or SHA-512 registry digest, and verify any available expected size. Missing or mismatched verification data is an operational error.
 
-After verification, SourceGate reads supported archive metadata for npm `.tgz` tarballs and PyPI `.whl`, `.zip`, `.tar.gz`, and `.tgz` artifacts. It records inventory counts, compressed and uncompressed size metrics, path depth, duplicate paths, and nested archive count. It emits policy findings for unsafe paths, file-count thresholds, uncompressed-size thresholds, and expansion-ratio thresholds. Unsupported verified archive formats are operational errors in `--inspect` mode.
+After verification, SourceGate reads supported archive metadata for npm `.tgz` tarballs and PyPI `.whl`, `.zip`, `.tar.gz`, and `.tgz` artifacts. It records inventory counts, compressed and uncompressed size metrics, path depth, duplicate paths, nested archive count, and bounded install/build execution-surface examples. It emits policy findings for unsafe paths, file-count thresholds, uncompressed-size thresholds, expansion-ratio thresholds, and execution surfaces. Unsupported verified archive formats are operational errors in `--inspect` mode.
 
-Archive inspection does not extract files, execute code, invoke package managers, or follow links. Source content scanning, build-surface detection, embedded-binary analysis, and suspicious string detection are deferred.
+Archive inspection does not extract files, execute code, invoke package managers, or follow links. Metadata reads are limited to 256 KiB per file and 1 MiB total per artifact. Broad source content scanning, embedded-binary analysis, and suspicious string detection are deferred.
 
 ## Debug Evaluation Trace
 
@@ -163,7 +163,7 @@ SourceGate currently does not:
 - Invoke package managers.
 - Execute lifecycle scripts.
 - Extract package archives.
-- Scan package source code or binary contents.
+- Broadly scan package source code or binary contents.
 - Perform runtime malware analysis.
 - Enforce final allow/block decisions beyond reporting findings.
 

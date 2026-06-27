@@ -297,6 +297,72 @@ func TestRunInspectAppliesArchivePolicyFindings(t *testing.T) {
 	}
 }
 
+func TestRunInspectAppliesExecutionSurfacePolicyFindings(t *testing.T) {
+	content := testTarGzip(t, "package/package.json", []byte(`{"scripts":{"postinstall":"node setup.js"}}`))
+	sum := sha512.Sum512(content)
+	var artifactRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pkg":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"name": "pkg",
+				"dist-tags": {"latest": "1.0.0"},
+				"time": {"1.0.0": "2021-02-20T15:42:16.891Z"},
+				"versions": {"1.0.0": {"dist": {
+					"tarball": "` + serverURLPlaceholder + `/artifact.tgz",
+					"integrity": "sha512-` + base64.StdEncoding.EncodeToString(sum[:]) + `"
+				}}}
+			}`))
+		case "/artifact.tgz":
+			artifactRequests++
+			w.Write(content)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	workspace := t.TempDir()
+	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{
+		Alert: config.PolicyTierConfig{ArtifactExecutionSurfaces: true},
+	}})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, config.DefaultPath), configData, 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	withWorkingDirectory(t, workspace)
+
+	if result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"npm", "install", "pkg"}); err != nil {
+		t.Fatalf("normal Run returned error: %v", err)
+	} else if artifactRequests != 0 || result.Report.ArtifactInspection != nil || hasFindingContaining(result.Report.Findings, "execution surface") {
+		t.Fatalf("normal run artifact requests = %d report = %+v, want metadata-only", artifactRequests, result.Report)
+	}
+
+	result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if artifactRequests != 1 {
+		t.Fatalf("artifact requests = %d, want one inspect download", artifactRequests)
+	}
+	if result.ExitCode != ExitAlertFinding || result.Report.Decision != report.DecisionAllow {
+		t.Fatalf("exit = %d decision = %q, want alert allow", result.ExitCode, result.Report.Decision)
+	}
+	if result.Report.ArtifactInspection == nil || result.Report.ArtifactInspection.ExecutionSurfaceCount != 1 {
+		t.Fatalf("artifact inspection = %+v, want one execution surface", result.Report.ArtifactInspection)
+	}
+	if !hasFindingContaining(result.Report.Findings, "postinstall") {
+		t.Fatalf("findings = %+v, want execution surface finding", result.Report.Findings)
+	}
+}
+
 func TestRunInspectPyPISdistArtifact(t *testing.T) {
 	content := testTarGzip(t, "requests/__init__.py", []byte("python"))
 	sum := sha256.Sum256(content)

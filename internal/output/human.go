@@ -75,6 +75,10 @@ func RenderHuman(w io.Writer, pkg report.PackageReport) {
 		fmt.Fprintf(w, "  Duplicate Paths: %d\n", pkg.ArtifactInspection.DuplicatePathCount)
 		fmt.Fprintf(w, "  Nested Archives: %d\n", pkg.ArtifactInspection.NestedArchiveCount)
 		fmt.Fprintf(w, "  Unsafe Paths: %d\n", pkg.ArtifactInspection.UnsafePathCount)
+		fmt.Fprintf(w, "  Execution Surfaces: %d\n", pkg.ArtifactInspection.ExecutionSurfaceCount)
+		for _, surface := range pkg.ArtifactInspection.ExecutionSurfaceExamples {
+			fmt.Fprintf(w, "    - %s\n", executionSurfaceDisplay(surface))
+		}
 	}
 
 	fmt.Fprintln(w)
@@ -110,4 +114,15 @@ func decisionOrInspectOnly(decision report.Decision) report.Decision {
 		return report.DecisionInspectOnly
 	}
 	return decision
+}
+
+func executionSurfaceDisplay(surface report.ArtifactExecutionSurface) string {
+	parts := []string{surface.Type, surface.Path}
+	if strings.TrimSpace(surface.Name) != "" {
+		parts = append(parts, surface.Name)
+	}
+	if strings.TrimSpace(surface.Detail) != "" {
+		parts = append(parts, surface.Detail)
+	}
+	return strings.Join(parts, " ")
 }

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sourcegate/sourcegate/internal/report"
 )
 
 func TestInspectTarGzipInventoryWithoutExtraction(t *testing.T) {
@@ -71,6 +73,75 @@ func TestInspectZipWheelInventoryAndSymlink(t *testing.T) {
 	}
 	if summary.ArchiveFormat != "zip" || summary.FileCount != 2 || summary.SymlinkCount != 1 || summary.NestedArchiveCount != 1 || summary.UnsafePathCount != 0 {
 		t.Fatalf("summary = %+v, want zip inventory counts", summary)
+	}
+}
+
+func TestInspectNPMExecutionSurfaces(t *testing.T) {
+	path := writeTarGzip(t, []tarEntry{
+		{name: "package/package.json", content: []byte(`{
+			"scripts": {
+				"postinstall": "node setup.js",
+				"test": "node test.js"
+			},
+			"bin": {
+				"pkg": "bin/cli.js"
+			},
+			"dependencies": {
+				"node-gyp": "^10.0.0"
+			}
+		}`)},
+		{name: "package/binding.gyp", content: []byte("{}")},
+	})
+
+	summary, err := Inspect(path, "pkg-1.0.0.tgz")
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	if summary.ExecutionSurfaceCount != 4 {
+		t.Fatalf("execution surfaces = %+v, want 4 surfaces", summary.ExecutionSurfaceExamples)
+	}
+	for _, want := range []string{"npm_lifecycle_script:postinstall", "npm_bin:pkg", "npm_native_build_hint:node-gyp", "npm_native_build_hint:binding.gyp"} {
+		if !containsSurface(summary.ExecutionSurfaceExamples, want) {
+			t.Fatalf("execution surfaces = %+v, want %q", summary.ExecutionSurfaceExamples, want)
+		}
+	}
+}
+
+func TestInspectPyPIExecutionSurfaces(t *testing.T) {
+	path := writeZip(t, []zipEntry{
+		{name: "pkg/setup.py", content: []byte("from setuptools import setup")},
+		{name: "pkg/pyproject.toml", content: []byte("[build-system]\nrequires = [\"setuptools\"]\nbuild-backend = \"setuptools.build_meta\"\n")},
+		{name: "pkg-1.0.0.dist-info/entry_points.txt", content: []byte("[console_scripts]\npkg-cli = pkg.cli:main\n[gui_scripts]\npkg-gui = pkg.gui:main\n")},
+		{name: "pkg/hook.pth", content: []byte("import pkg.hook")},
+		{name: "pkg-1.0.0.data/scripts/pkg-tool", content: []byte("#!/usr/bin/env python")},
+		{name: "pkg/scripts/install.sh", content: []byte("#!/bin/sh")},
+	})
+
+	summary, err := Inspect(path, "pkg-1.0.0-py3-none-any.whl")
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	if summary.ExecutionSurfaceCount != 8 {
+		t.Fatalf("execution surfaces = %+v, want 8 surfaces", summary.ExecutionSurfaceExamples)
+	}
+	for _, want := range []string{"pypi_build_file:setup.py", "pypi_build_file:pyproject.toml", "pypi_build_backend:build-backend", "pypi_entry_point:pkg-cli", "pypi_entry_point:pkg-gui", "pypi_startup_file:hook.pth", "pypi_script:pkg-tool", "script_file:install.sh"} {
+		if !containsSurface(summary.ExecutionSurfaceExamples, want) {
+			t.Fatalf("execution surfaces = %+v, want %q", summary.ExecutionSurfaceExamples, want)
+		}
+	}
+}
+
+func TestInspectSkipsOversizedMetadataFiles(t *testing.T) {
+	content := append([]byte(`{"scripts":{"postinstall":"node setup.js"},"padding":"`), bytes.Repeat([]byte("x"), int(maxMetadataFileBytes))...)
+	content = append(content, []byte(`"}`)...)
+	path := writeTarGzip(t, []tarEntry{{name: "package/package.json", content: content}})
+
+	summary, err := Inspect(path, "pkg-1.0.0.tgz")
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	if summary.ExecutionSurfaceCount != 0 {
+		t.Fatalf("execution surfaces = %+v, want oversized package.json skipped", summary.ExecutionSurfaceExamples)
 	}
 }
 
@@ -202,6 +273,16 @@ func containsExample(values []string, want string) bool {
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSurface(values []report.ArtifactExecutionSurface, want string) bool {
+	parts := strings.SplitN(want, ":", 2)
+	for _, value := range values {
+		if value.Type == parts[0] && strings.Contains(value.Name, parts[1]) {
 			return true
 		}
 	}

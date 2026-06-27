@@ -5,8 +5,8 @@
 SourceGate is a Go CLI that inspects package registry metadata before a package install is trusted.
 It accepts install-shaped commands for npm and pip, fetches public registry metadata, evaluates deterministic policy checks, prints human or JSON output, and exits without installing anything.
 
-Normal commands remain metadata-only. `--inspect` additionally downloads one preferred install-target artifact to a verified temporary file and inspects archive metadata without extraction.
-SourceGate does not unpack package contents, scan source code, run package-manager installs, or execute lifecycle scripts.
+Normal commands remain metadata-only. `--inspect` additionally downloads one preferred install-target artifact to a verified temporary file and inspects archive metadata plus bounded install/build metadata without extraction.
+SourceGate does not unpack package contents, broadly scan source code, run package-manager installs, or execute lifecycle scripts.
 PyPI install-target provenance inspection may run local `python -m pip debug --verbose` only to discover compatible tags.
 
 ## Runtime Flow
@@ -17,14 +17,14 @@ PyPI install-target provenance inspection may run local `python -m pip debug --v
 4. `internal/ecosystem/npm` and `internal/ecosystem/pypi` fetch registry metadata and normalize it into `report.PackageReport`.
 5. `internal/checks` evaluates policy tiers and appends findings.
 6. For `--inspect`, `internal/artifact` downloads and verifies the selected artifact unless metadata policy blocks it.
-7. `internal/archiveinspect` reads the verified archive inventory and hard archive safety metadata without extracting files.
+7. `internal/archiveinspect` reads the verified archive inventory, hard archive safety metadata, and bounded install/build execution-surface metadata without extracting files.
 8. `internal/output` renders human-readable or JSON results.
 
 ## Important Files And Folders
 
 - `cmd/sourcegate/`: CLI entrypoint.
 - `internal/app/`: main orchestration and exit-code mapping.
-- `internal/archiveinspect/`: archive inventory and deterministic archive safety inspection.
+- `internal/archiveinspect/`: archive inventory, deterministic archive safety inspection, and bounded install/build execution-surface inspection.
 - `internal/artifact/`: bounded temporary artifact download and digest verification.
 - `internal/cli/`: command parsing and package spec validation.
 - `internal/config/`: config schema, loading, normalization, and validation.
@@ -88,6 +88,7 @@ PyPI checks:
 - artifact file-count limits
 - artifact total uncompressed-size limits
 - artifact expansion-ratio limits
+- install/build execution surfaces from bounded metadata, including npm lifecycle scripts and `bin` entries, npm native build hints, PyPI build files/backends, wheel entry points, `.pth` startup files, wheel scripts, and common shell/build files
 
 History-dependent npm lifecycle and PyPI dependency checks compare with the immediate previous eligible release. Older npm lifecycle history is used only to identify reintroductions. Only immediate-previous PyPI version-specific dependency metadata should be fetched, and only when a dependency-change policy is enabled.
 
@@ -98,7 +99,7 @@ For PyPI `install-target` provenance, a failed `pip debug` compatibility lookup 
 Default output is human-readable.
 `--format json` emits structured JSON with the evaluated package report.
 `--debug` appends or includes a bounded evaluation trace without enabling disabled checks or changing behavior.
-`--inspect` downloads one preferred install-target artifact, verifies it, inspects supported archive metadata, reports the result, and deletes the temporary file. It never installs the package.
+`--inspect` downloads one preferred install-target artifact, verifies it, inspects supported archive metadata and bounded execution-surface metadata, reports the result, and deletes the temporary file. It never installs the package.
 
 Exit codes:
 
@@ -118,5 +119,5 @@ Config changes usually require updates in config structs, validation, checked-in
 
 ## Known Boundaries And Future Work
 
-Current non-goals include archive extraction, package-content scanning, dependency resolution, runtime malware analysis, and real install enforcement.
-Future work may include scanning verified downloaded archives without installation, stronger dependency-confusion and typosquatting checks, source repository analysis, and suspicious file/code indicators.
+Current non-goals include archive extraction, broad package-content scanning, dependency resolution, runtime malware analysis, and real install enforcement.
+Future work may include deeper scanning of verified downloaded archives without installation, stronger dependency-confusion and typosquatting checks, source repository analysis, and suspicious file/code indicators.

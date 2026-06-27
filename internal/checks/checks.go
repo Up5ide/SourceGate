@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sourcegate/sourcegate/internal/checks/artifactexecution"
 	"github.com/sourcegate/sourcegate/internal/checks/artifactsafety"
 	"github.com/sourcegate/sourcegate/internal/checks/dormant"
 	"github.com/sourcegate/sourcegate/internal/checks/firstrelease"
@@ -457,6 +458,22 @@ func EvaluateArtifactInspection(pkg *report.PackageReport, cfg config.Config, op
 			return artifactsafety.CheckExpansionRatio(*pkg, policy.ArtifactMaxExpansionRatio)
 		},
 	})
+	evaluate(debugPolicyCheck{
+		id:         "artifact_execution_surfaces",
+		applicable: artifactApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.ArtifactExecutionSurfaces }),
+		evidence: func() []string {
+			return append(artifactexecution.Evidence(*pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.ArtifactExecutionSurfaces
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !policy.ArtifactExecutionSurfaces {
+				return nil
+			}
+			return artifactexecution.CheckExecutionSurfaces(*pkg)
+		},
+	})
 
 	if enabledPolicy {
 		if hasBlockFinding(pkg.Findings) {
@@ -609,7 +626,8 @@ func artifactPolicyEnabled(tiers []policyTier) bool {
 		return policy.ArtifactUnsafePaths ||
 			policy.ArtifactMaxFileCount > 0 ||
 			policy.ArtifactMaxUncompressedSizeMB > 0 ||
-			policy.ArtifactMaxExpansionRatio > 0
+			policy.ArtifactMaxExpansionRatio > 0 ||
+			policy.ArtifactExecutionSurfaces
 	})
 }
 
@@ -748,6 +766,9 @@ func artifactPolicyTierSummary(policy config.PolicyTierConfig) string {
 	}
 	if policy.ArtifactMaxExpansionRatio > 0 {
 		summaries = append(summaries, fmt.Sprintf("artifact expansion ratio limit is %d", policy.ArtifactMaxExpansionRatio))
+	}
+	if policy.ArtifactExecutionSurfaces {
+		summaries = append(summaries, "artifact install/build execution surface checks enabled")
 	}
 	return joinPolicySummaries(summaries)
 }

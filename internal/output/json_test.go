@@ -76,15 +76,24 @@ func TestRenderJSONIncludesArtifactSummaryButNotInternalCandidate(t *testing.T) 
 		ArtifactCandidate: report.ArtifactCandidate{URL: "https://secret.example/artifact"},
 		ArtifactDownload:  &report.ArtifactDownloadSummary{Status: report.ArtifactDownloadStatusSkippedBlocked},
 		ArtifactInspection: &report.ArtifactInspectionSummary{
-			Status:        report.ArtifactInspectionStatusInspected,
-			ArchiveFormat: "zip",
-			FileCount:     1,
+			Status:                report.ArtifactInspectionStatusInspected,
+			ArchiveFormat:         "zip",
+			FileCount:             1,
+			ExecutionSurfaceCount: 1,
+			ExecutionSurfaceExamples: []report.ArtifactExecutionSurface{
+				{Type: "pypi_build_file", Path: "pkg/setup.py", Name: "setup.py"},
+			},
 		},
 	})
 	if err != nil {
 		t.Fatalf("RenderJSON returned error: %v", err)
 	}
-	if !strings.Contains(buf.String(), "\"artifact_download\"") || !strings.Contains(buf.String(), "\"artifact_inspection\"") || strings.Contains(buf.String(), "secret.example") || strings.Contains(buf.String(), "artifact_candidate") {
+	if !strings.Contains(buf.String(), "\"artifact_download\"") ||
+		!strings.Contains(buf.String(), "\"artifact_inspection\"") ||
+		!strings.Contains(buf.String(), "\"execution_surface_examples\"") ||
+		!strings.Contains(buf.String(), "\"pypi_build_file\"") ||
+		strings.Contains(buf.String(), "secret.example") ||
+		strings.Contains(buf.String(), "artifact_candidate") {
 		t.Fatalf("JSON artifact fields incorrect:\n%s", buf.String())
 	}
 }

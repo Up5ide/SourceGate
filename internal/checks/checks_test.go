@@ -570,6 +570,35 @@ func TestEvaluateArtifactInspectionAddsFindingsAndDecision(t *testing.T) {
 	}
 }
 
+func TestEvaluateArtifactInspectionAddsExecutionSurfaceFinding(t *testing.T) {
+	pkg := report.PackageReport{
+		Decision: report.DecisionAllow,
+		ArtifactInspection: &report.ArtifactInspectionSummary{
+			ArchiveFormat:         "tar.gz",
+			ExecutionSurfaceCount: 1,
+			ExecutionSurfaceExamples: []report.ArtifactExecutionSurface{
+				{Type: "npm_lifecycle_script", Path: "package/package.json", Name: "postinstall", Detail: "node setup.js"},
+			},
+		},
+	}
+	cfg := config.Config{Policy: config.PolicyConfig{
+		Alert: config.PolicyTierConfig{ArtifactExecutionSurfaces: true},
+	}}
+
+	EvaluateArtifactInspection(&pkg, cfg, EvaluationOptions{Debug: true})
+
+	if pkg.Decision != report.DecisionAllow {
+		t.Fatalf("decision = %q, want ALLOW", pkg.Decision)
+	}
+	if len(pkg.Findings) != 1 || pkg.Findings[0].Severity != levelAlert || !strings.Contains(pkg.Findings[0].Message, "postinstall") {
+		t.Fatalf("findings = %+v, want alert execution surface finding", pkg.Findings)
+	}
+	trace := findTrace(t, pkg.DebugTrace, "artifact_execution_surfaces")
+	if trace.Status != report.DebugTraceMatch || trace.Severity != levelAlert || !containsEvidence(trace, "postinstall") {
+		t.Fatalf("trace = %+v, want alert match with surface evidence", trace)
+	}
+}
+
 func TestEvaluateArtifactInspectionLeavesMetadataOnlyEvaluationUnchanged(t *testing.T) {
 	pkg := report.PackageReport{}
 	cfg := config.Config{Policy: config.PolicyConfig{

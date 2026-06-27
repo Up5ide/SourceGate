@@ -118,9 +118,13 @@ func TestRenderHumanIncludesArtifactDownloadSummary(t *testing.T) {
 			DuplicatePathCount:     1,
 			NestedArchiveCount:     1,
 			UnsafePathCount:        1,
+			ExecutionSurfaceCount:  1,
+			ExecutionSurfaceExamples: []report.ArtifactExecutionSurface{
+				{Type: "npm_lifecycle_script", Path: "package/package.json", Name: "postinstall", Detail: "node setup.js"},
+			},
 		},
 	})
-	for _, want := range []string{"Artifact Download:", "Status: DOWNLOADED_VERIFIED", "Filename: pkg.tgz", "Digest: sha512 verified=true", "Artifact Inspection:", "Archive Format: tar.gz", "Files: 1", "Unsafe Paths: 1"} {
+	for _, want := range []string{"Artifact Download:", "Status: DOWNLOADED_VERIFIED", "Filename: pkg.tgz", "Digest: sha512 verified=true", "Artifact Inspection:", "Archive Format: tar.gz", "Files: 1", "Unsafe Paths: 1", "Execution Surfaces: 1", "npm_lifecycle_script package/package.json postinstall node setup.js"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, buf.String())
 		}
