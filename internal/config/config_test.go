@@ -27,6 +27,10 @@ func TestLoad(t *testing.T) {
 				"pypi_provenance_scope": false,
 				"pypi_include_optional_dependencies": false,
 				"pypi_release_file_count_change": false,
+				"artifact_unsafe_paths": false,
+				"artifact_max_file_count": false,
+				"artifact_max_uncompressed_size_mb": false,
+				"artifact_max_expansion_ratio": false,
 				"protected_packages": {},
 				"protected_tokens": {}
 			},
@@ -46,6 +50,10 @@ func TestLoad(t *testing.T) {
 				"pypi_provenance_scope": "install-target",
 				"pypi_include_optional_dependencies": true,
 				"pypi_release_file_count_change": true,
+				"artifact_unsafe_paths": true,
+				"artifact_max_file_count": 1000,
+				"artifact_max_uncompressed_size_mb": 256,
+				"artifact_max_expansion_ratio": 50,
 				"protected_packages": {
 					"npm": ["react", "lodash"],
 					"pypi": ["requests", "django"]
@@ -71,6 +79,10 @@ func TestLoad(t *testing.T) {
 				"pypi_provenance_scope": false,
 				"pypi_include_optional_dependencies": false,
 				"pypi_release_file_count_change": false,
+				"artifact_unsafe_paths": true,
+				"artifact_max_file_count": 20000,
+				"artifact_max_uncompressed_size_mb": 1024,
+				"artifact_max_expansion_ratio": 100,
 				"protected_packages": {},
 				"protected_tokens": {}
 			}
@@ -135,6 +147,18 @@ func TestLoad(t *testing.T) {
 	if !config.Policy.Alert.PyPIReleaseFileCountChange {
 		t.Fatalf("alert pypi release file count change = false, want true")
 	}
+	if !config.Policy.Alert.ArtifactUnsafePaths {
+		t.Fatalf("alert artifact unsafe paths = false, want true")
+	}
+	if config.Policy.Alert.ArtifactMaxFileCount != 1000 {
+		t.Fatalf("alert artifact max file count = %d, want 1000", config.Policy.Alert.ArtifactMaxFileCount)
+	}
+	if config.Policy.Alert.ArtifactMaxUncompressedSizeMB != 256 {
+		t.Fatalf("alert artifact max uncompressed size MB = %d, want 256", config.Policy.Alert.ArtifactMaxUncompressedSizeMB)
+	}
+	if config.Policy.Alert.ArtifactMaxExpansionRatio != 50 {
+		t.Fatalf("alert artifact max expansion ratio = %d, want 50", config.Policy.Alert.ArtifactMaxExpansionRatio)
+	}
 	if config.Policy.Block.DormantReleaseThresholdDays != 365 {
 		t.Fatalf("block dormant threshold days = %d, want 365", config.Policy.Block.DormantReleaseThresholdDays)
 	}
@@ -176,6 +200,9 @@ func TestLoadAcceptsFalseForIntegerAndMapOptions(t *testing.T) {
 				"install_lifecycle_history_versions": false,
 				"pypi_artifact_history_versions": false,
 				"pypi_file_size_jump_percent": false,
+				"artifact_max_file_count": false,
+				"artifact_max_uncompressed_size_mb": false,
+				"artifact_max_expansion_ratio": false,
 				"protected_packages": false,
 				"protected_tokens": false
 			}
@@ -203,6 +230,15 @@ func TestLoadAcceptsFalseForIntegerAndMapOptions(t *testing.T) {
 	}
 	if config.Policy.Alert.PyPIFileSizeJumpPercent != 0 {
 		t.Fatalf("pypi file size jump percent = %d, want 0", config.Policy.Alert.PyPIFileSizeJumpPercent)
+	}
+	if config.Policy.Alert.ArtifactMaxFileCount != 0 {
+		t.Fatalf("artifact max file count = %d, want 0", config.Policy.Alert.ArtifactMaxFileCount)
+	}
+	if config.Policy.Alert.ArtifactMaxUncompressedSizeMB != 0 {
+		t.Fatalf("artifact max uncompressed size MB = %d, want 0", config.Policy.Alert.ArtifactMaxUncompressedSizeMB)
+	}
+	if config.Policy.Alert.ArtifactMaxExpansionRatio != 0 {
+		t.Fatalf("artifact max expansion ratio = %d, want 0", config.Policy.Alert.ArtifactMaxExpansionRatio)
 	}
 	if len(config.Policy.Alert.ProtectedPackages) != 0 {
 		t.Fatalf("protected packages = %v, want empty map", config.Policy.Alert.ProtectedPackages)
@@ -242,6 +278,7 @@ func TestLoadRejectsInvalidFlexiblePolicyValueTypes(t *testing.T) {
 		"string map":      `{"policy":{"alert":{"protected_tokens":"npm"}}}`,
 		"number bool":     `{"policy":{"alert":{"pypi_dependency_change":1}}}`,
 		"number optional": `{"policy":{"alert":{"pypi_include_optional_dependencies":1}}}`,
+		"number artifact": `{"policy":{"alert":{"artifact_unsafe_paths":1}}}`,
 		"array scope":     `{"policy":{"alert":{"pypi_provenance_scope":[]}}}`,
 		"unknown field":   `{"policy":{"alert":{"does_not_exist":false}}}`,
 	}
@@ -306,6 +343,9 @@ func TestLoadRejectsNegativeTierThresholds(t *testing.T) {
 		"negative lifecycle history versions": `{"policy":{"inform":{"install_lifecycle_history_versions":-1}}}`,
 		"negative pypi history versions":      `{"policy":{"alert":{"pypi_artifact_history_versions":-1}}}`,
 		"negative pypi size jump percent":     `{"policy":{"block":{"pypi_file_size_jump_percent":-1}}}`,
+		"negative artifact file count":        `{"policy":{"alert":{"artifact_max_file_count":-1}}}`,
+		"negative artifact size":              `{"policy":{"block":{"artifact_max_uncompressed_size_mb":-1}}}`,
+		"negative artifact expansion":         `{"policy":{"inform":{"artifact_max_expansion_ratio":-1}}}`,
 	}
 
 	for name, content := range cases {

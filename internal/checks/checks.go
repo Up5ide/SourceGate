@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sourcegate/sourcegate/internal/checks/artifactsafety"
 	"github.com/sourcegate/sourcegate/internal/checks/dormant"
 	"github.com/sourcegate/sourcegate/internal/checks/firstrelease"
 	"github.com/sourcegate/sourcegate/internal/checks/installlifecycle"
@@ -372,6 +373,100 @@ func EvaluateWithOptions(pkg *report.PackageReport, cfg config.Config, now time.
 	}
 }
 
+func EvaluateArtifactInspection(pkg *report.PackageReport, cfg config.Config, options EvaluationOptions) {
+	tiers := strongestFirstPolicyTiers(cfg.Policy)
+	enabledPolicy := artifactPolicyEnabled(tiers)
+	if !enabledPolicy && !options.Debug {
+		return
+	}
+
+	if enabledPolicy {
+		pkg.PolicySummary = appendPolicySummary(pkg.PolicySummary, artifactPolicySummary(cfg.Policy))
+	}
+
+	evaluate := func(check debugPolicyCheck) {
+		findings, trace := evaluatePolicyCheck(tiers, options.Debug, check)
+		pkg.Findings = append(pkg.Findings, findings...)
+		if options.Debug {
+			pkg.DebugTrace = append(pkg.DebugTrace, trace)
+		}
+	}
+
+	artifactApplicable := pkg.ArtifactInspection != nil
+	evaluate(debugPolicyCheck{
+		id:         "artifact_unsafe_paths",
+		applicable: artifactApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.ArtifactUnsafePaths }),
+		evidence: func() []string {
+			return append(artifactsafety.Evidence(*pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.ArtifactUnsafePaths
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !policy.ArtifactUnsafePaths {
+				return nil
+			}
+			return artifactsafety.CheckUnsafePaths(*pkg)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "artifact_file_count",
+		applicable: artifactApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.ArtifactMaxFileCount > 0 }),
+		evidence: func() []string {
+			return append(artifactsafety.Evidence(*pkg), integerThresholdEvidence("thresholds (files)", tiers, func(policy config.PolicyTierConfig) int {
+				return policy.ArtifactMaxFileCount
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if policy.ArtifactMaxFileCount <= 0 {
+				return nil
+			}
+			return artifactsafety.CheckFileCount(*pkg, policy.ArtifactMaxFileCount)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "artifact_uncompressed_size",
+		applicable: artifactApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.ArtifactMaxUncompressedSizeMB > 0 }),
+		evidence: func() []string {
+			return append(artifactsafety.Evidence(*pkg), integerThresholdEvidence("thresholds (MiB)", tiers, func(policy config.PolicyTierConfig) int {
+				return policy.ArtifactMaxUncompressedSizeMB
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if policy.ArtifactMaxUncompressedSizeMB <= 0 {
+				return nil
+			}
+			return artifactsafety.CheckUncompressedSize(*pkg, policy.ArtifactMaxUncompressedSizeMB)
+		},
+	})
+	evaluate(debugPolicyCheck{
+		id:         "artifact_expansion_ratio",
+		applicable: artifactApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.ArtifactMaxExpansionRatio > 0 }),
+		evidence: func() []string {
+			return append(artifactsafety.Evidence(*pkg), integerThresholdEvidence("thresholds (ratio)", tiers, func(policy config.PolicyTierConfig) int {
+				return policy.ArtifactMaxExpansionRatio
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if policy.ArtifactMaxExpansionRatio <= 0 {
+				return nil
+			}
+			return artifactsafety.CheckExpansionRatio(*pkg, policy.ArtifactMaxExpansionRatio)
+		},
+	})
+
+	if enabledPolicy {
+		if hasBlockFinding(pkg.Findings) {
+			pkg.Decision = report.DecisionBlock
+		} else {
+			pkg.Decision = report.DecisionAllow
+		}
+	}
+}
+
 func hasBlockFinding(findings []report.Finding) bool {
 	for _, finding := range findings {
 		if finding.Severity == levelBlock {
@@ -509,6 +604,15 @@ func policyTierEnabled(policy config.PolicyTierConfig) bool {
 		hasProtectedNamePolicy(policy)
 }
 
+func artifactPolicyEnabled(tiers []policyTier) bool {
+	return anyTier(tiers, func(policy config.PolicyTierConfig) bool {
+		return policy.ArtifactUnsafePaths ||
+			policy.ArtifactMaxFileCount > 0 ||
+			policy.ArtifactMaxUncompressedSizeMB > 0 ||
+			policy.ArtifactMaxExpansionRatio > 0
+	})
+}
+
 func hasProtectedNamePolicy(policy config.PolicyTierConfig) bool {
 	return len(policy.ProtectedPackages) > 0 || len(policy.ProtectedTokens) > 0
 }
@@ -621,6 +725,33 @@ func policyTierSummary(policy config.PolicyTierConfig) string {
 	return joinPolicySummaries(summaries)
 }
 
+func artifactPolicySummary(policy config.PolicyConfig) string {
+	var summaries []string
+	for _, tier := range displayOrderPolicyTiers(policy) {
+		if summary := artifactPolicyTierSummary(tier.policy); summary != "" {
+			summaries = append(summaries, tier.level+": "+summary)
+		}
+	}
+	return joinPolicySummaries(summaries)
+}
+
+func artifactPolicyTierSummary(policy config.PolicyTierConfig) string {
+	var summaries []string
+	if policy.ArtifactUnsafePaths {
+		summaries = append(summaries, "artifact unsafe path checks enabled")
+	}
+	if policy.ArtifactMaxFileCount > 0 {
+		summaries = append(summaries, fmt.Sprintf("artifact file count limit is %d", policy.ArtifactMaxFileCount))
+	}
+	if policy.ArtifactMaxUncompressedSizeMB > 0 {
+		summaries = append(summaries, fmt.Sprintf("artifact uncompressed size limit is %d MiB", policy.ArtifactMaxUncompressedSizeMB))
+	}
+	if policy.ArtifactMaxExpansionRatio > 0 {
+		summaries = append(summaries, fmt.Sprintf("artifact expansion ratio limit is %d", policy.ArtifactMaxExpansionRatio))
+	}
+	return joinPolicySummaries(summaries)
+}
+
 func packageHistoryIndeterminateReason(pkg report.PackageReport) string {
 	if isNPM(pkg) {
 		return pkg.NPMHistory.IndeterminateReason
@@ -647,4 +778,14 @@ func joinPolicySummaries(values []string) string {
 		result += "; " + value
 	}
 	return result
+}
+
+func appendPolicySummary(existing, addition string) string {
+	if addition == "" {
+		return existing
+	}
+	if existing == "" {
+		return addition
+	}
+	return existing + "; " + addition
 }

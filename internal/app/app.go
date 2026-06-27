@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/sourcegate/sourcegate/internal/archiveinspect"
 	"github.com/sourcegate/sourcegate/internal/artifact"
 	"github.com/sourcegate/sourcegate/internal/checks"
 	"github.com/sourcegate/sourcegate/internal/cli"
@@ -75,11 +76,21 @@ func (a *App) Run(ctx context.Context, args []string) (RunResult, error) {
 		if pkg.Decision == report.DecisionBlock {
 			pkg.ArtifactDownload = &report.ArtifactDownloadSummary{Status: report.ArtifactDownloadStatusSkippedBlocked}
 		} else {
-			summary, err := artifact.DownloadAndVerify(ctx, a.client, pkg.ArtifactCandidate, nil)
+			var inspection report.ArtifactInspectionSummary
+			summary, err := artifact.DownloadAndVerify(ctx, a.client, pkg.ArtifactCandidate, func(path string) error {
+				var inspectErr error
+				inspection, inspectErr = archiveinspect.Inspect(path, pkg.ArtifactCandidate.Filename)
+				return inspectErr
+			})
 			if err != nil {
 				return RunResult{Report: pkg, ExitCode: ExitOperationalError}, err
 			}
 			pkg.ArtifactDownload = &summary
+			pkg.ArtifactInspection = &inspection
+			checks.EvaluateArtifactInspection(&pkg, cfg, checks.EvaluationOptions{
+				Debug: req.Debug,
+			})
+			exitCode = ExitCodeForReport(pkg)
 		}
 	}
 	switch req.OutputFormat {

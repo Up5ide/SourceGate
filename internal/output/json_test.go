@@ -75,11 +75,16 @@ func TestRenderJSONIncludesArtifactSummaryButNotInternalCandidate(t *testing.T) 
 	err := RenderJSON(&buf, report.PackageReport{
 		ArtifactCandidate: report.ArtifactCandidate{URL: "https://secret.example/artifact"},
 		ArtifactDownload:  &report.ArtifactDownloadSummary{Status: report.ArtifactDownloadStatusSkippedBlocked},
+		ArtifactInspection: &report.ArtifactInspectionSummary{
+			Status:        report.ArtifactInspectionStatusInspected,
+			ArchiveFormat: "zip",
+			FileCount:     1,
+		},
 	})
 	if err != nil {
 		t.Fatalf("RenderJSON returned error: %v", err)
 	}
-	if !strings.Contains(buf.String(), "\"artifact_download\"") || strings.Contains(buf.String(), "secret.example") || strings.Contains(buf.String(), "artifact_candidate") {
+	if !strings.Contains(buf.String(), "\"artifact_download\"") || !strings.Contains(buf.String(), "\"artifact_inspection\"") || strings.Contains(buf.String(), "secret.example") || strings.Contains(buf.String(), "artifact_candidate") {
 		t.Fatalf("JSON artifact fields incorrect:\n%s", buf.String())
 	}
 }

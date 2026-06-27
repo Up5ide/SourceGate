@@ -4,11 +4,11 @@ SourceGate is a security-first Go CLI that sits in front of package managers and
 
 The long-term goal is to become a local, policy-driven enforcement layer for software supply-chain risk. SourceGate should help developers and CI systems identify risky packages, explain the reasons clearly, and eventually allow, warn, or block installation based on deterministic policy.
 
-## Version 0.6.5 Scope
+## Version 0.7.0 Scope
 
-Version 0.6.5 adds structured JSON output plus CI-friendly exit codes. The current development branch also adds an explicit bounded artifact-download stage through `--inspect`.
+Version 0.7.0 adds structured JSON output, CI-friendly exit codes, and an explicit bounded artifact-download and archive-safety stage through `--inspect`.
 
-SourceGate does not install packages or invoke the real package manager. Normal commands fetch public registry metadata only. `--inspect` additionally downloads one preferred install-target artifact into an OS temporary file, verifies its registry digest, and deletes it before exit.
+SourceGate does not install packages or invoke the real package manager. Normal commands fetch public registry metadata only. `--inspect` additionally downloads one preferred install-target artifact into an OS temporary file, verifies its registry digest, inspects archive safety metadata without extraction, and deletes it before exit.
 
 Supported command shape:
 
@@ -35,7 +35,7 @@ Expected behavior:
 5. Exit with a deterministic status code for CI.
 6. Exit without installing the package.
 
-Global prefix options can be passed before the package manager. The optional `--debug` flag appends a concise evaluation trace to standard output. `--inspect` downloads and verifies one preferred install-target artifact after metadata policy evaluation; a `BLOCK` result skips the download. Use `--format json` for structured output. PyPI inspection also accepts `--python`, `--target-platform`, `--python-version`, `--implementation`, and repeatable `--abi` target overrides.
+Global prefix options can be passed before the package manager. The optional `--debug` flag appends a concise evaluation trace to standard output. `--inspect` downloads, verifies, and archive-inspects one preferred install-target artifact after metadata policy evaluation; a metadata `BLOCK` result skips the download. Use `--format json` for structured output. PyPI inspection also accepts `--python`, `--target-platform`, `--python-version`, `--implementation`, and repeatable `--abi` target overrides.
 
 ## Mission
 
@@ -74,11 +74,11 @@ Supported behavior:
 - Append a human-readable policy evaluation trace when `--debug` is provided before the package manager.
 - Check PyPI provenance for install-target artifacts by default when the configured policy requires provenance.
 - Print a warning and mark install-target provenance indeterminate when Python compatibility-tag inspection fails, without guessing compatible wheels.
-- With `--inspect`, download one preferred install-target artifact to a temporary file, enforce a 100 MiB limit, verify its registry digest, report the result, and delete the file.
+- With `--inspect`, download one preferred install-target artifact to a temporary file, enforce a 100 MiB limit, verify its registry digest, inspect archive inventory and hard archive safety issues, report the result, and delete the file.
 - Exit without installing the package.
 - Avoid invoking `npm`, package installation, or any package lifecycle hooks. PyPI install-target provenance inspection may run local `<python> -m pip debug --verbose` to discover compatibility tags.
 
-The current version does not extract or analyze package contents and does not invoke package-manager install behavior.
+The current version does not extract package contents, scan source code, or invoke package-manager install behavior. Archive inspection reads headers and metadata only.
 
 ## Documentation
 
@@ -97,7 +97,6 @@ Near-term work:
 
 Later work:
 
-- Extract and inspect verified package archives without installing them.
 - Detect Python build-time execution surfaces such as `setup.py` and build backends.
 - Add typosquatting and dependency confusion checks.
 - Add upstream repository commit-time analysis where package metadata exposes a source repository.

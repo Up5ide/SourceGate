@@ -1,6 +1,6 @@
 # SourceGate Design
 
-SourceGate is an inspection CLI for package-install-shaped commands. It accepts npm and pip install commands with optional exact package versions, fetches public registry metadata, runs deterministic policy checks, optionally downloads one verified install-target artifact, renders human-readable or JSON output, and exits without installing anything.
+SourceGate is an inspection CLI for package-install-shaped commands. It accepts npm and pip install commands with optional exact package versions, fetches public registry metadata, runs deterministic policy checks, optionally downloads and archive-inspects one verified install-target artifact, renders human-readable or JSON output, and exits without installing anything.
 
 ## Runtime Flow
 
@@ -11,9 +11,11 @@ The high-level flow is:
 3. `internal/app` loads `sourcegate.config.json`, selects an ecosystem adapter, fetches metadata for the parsed package spec, runs policy checks, and renders output.
 4. `internal/ecosystem/npm` or `internal/ecosystem/pypi` selects either the requested exact version or the registry latest release and converts registry responses into a shared `report.PackageReport`.
 5. `internal/checks` evaluates configured policy tiers and appends findings to the report.
-6. When `--inspect` is set and metadata policy does not block, `internal/artifact` downloads one selected artifact into a temporary file, enforces limits, verifies its digest, and deletes it.
-7. `internal/output` renders either human output or a structured JSON envelope.
-8. `cmd/sourcegate` exits with a deterministic CI status code based on the highest finding severity.
+6. When `--inspect` is set and metadata policy does not block, `internal/artifact` downloads one selected artifact into a temporary file, enforces limits, and verifies its digest.
+7. `internal/archiveinspect` reads the verified archive without extracting it, records inventory metrics, and detects hard archive safety issues.
+8. The temporary artifact is deleted before output or error return.
+9. `internal/output` renders either human output or a structured JSON envelope.
+10. `cmd/sourcegate` exits with a deterministic CI status code based on the highest finding severity.
 
 The CLI does not invoke `npm`, package installation, or any package lifecycle hook. PyPI install-target provenance inspection may run local `<python> -m pip debug --verbose` to resolve compatibility tags.
 
@@ -22,6 +24,7 @@ The CLI does not invoke `npm`, package installation, or any package lifecycle ho
 ```text
 cmd/sourcegate/          CLI entrypoint
 internal/app/            Application orchestration
+internal/archiveinspect/ Archive inventory and safety inspection
 internal/artifact/       Bounded temporary artifact download and verification
 internal/cli/            Command parsing
 internal/config/         Config schema, loading, and validation
@@ -43,7 +46,7 @@ Tests live next to the package they cover using Go's `*_test.go` convention.
 
 Common fields include ecosystem, registry, package name, selected version, publish timestamps, description, license, author, maintainers, project URLs, version count, policy summary, decision, findings, and optional debug trace entries.
 
-Adapters may attach an internal-only artifact candidate containing its registry URL and verification data. Public reports expose only an optional artifact-download summary; temporary paths and download URLs are never rendered.
+Adapters may attach an internal-only artifact candidate containing its registry URL and verification data. Public reports expose optional artifact-download and artifact-inspection summaries; temporary paths and download URLs are never rendered.
 
 npm-specific metadata currently includes:
 
@@ -61,7 +64,7 @@ Checks should read from `PackageReport` and return findings without performing p
 
 ## Output And Exit Codes
 
-Human output remains the default. `--format json` writes a pretty-printed JSON object with `schema_version`, `sourcegate_version`, `install_executed`, and the full evaluated package report. JSON schema version `2` adds the optional `artifact_download` summary.
+Human output remains the default. `--format json` writes a pretty-printed JSON object with `schema_version`, `sourcegate_version`, `install_executed`, and the full evaluated package report. JSON schema version `2` added the optional `artifact_download` summary; schema version `3` adds the optional `artifact_inspection` summary.
 
 Operational and usage errors are written as plain text to stderr and do not emit partial JSON.
 
@@ -94,7 +97,7 @@ The policy model has three tiers:
 - `alert`
 - `block`
 
-`internal/checks` evaluates tiers from strongest to weakest for each check: `block`, then `alert`, then `inform`. If the same check matches multiple tiers, only the strongest matching tier is reported for that check.
+`internal/checks` evaluates tiers from strongest to weakest for each check: `block`, then `alert`, then `inform`. If the same check matches multiple tiers, only the strongest matching tier is reported for that check. Archive safety checks run only after successful `--inspect` archive inspection.
 
 The `block` tier sets the report decision to `BLOCK` and exits with code `30`. SourceGate still does not run or block a real package-manager install.
 
@@ -107,7 +110,7 @@ Config also influences adapter fetch behavior. For PyPI, `internal/app` inspects
 
 ## Checks
 
-Current checks are metadata-only:
+Current metadata checks are:
 
 - Release age.
 - Dormant release gap.
@@ -116,13 +119,19 @@ Current checks are metadata-only:
 - npm lifecycle script declaration, suspicious commands, history changes, and dormant script additions.
 - PyPI artifact shape, file size jump, dependency change, provenance availability, and release file count changes.
 
+`--inspect` also enables archive safety checks for unsafe archive paths, file-count limits, total uncompressed-size limits, and high expansion ratios.
+
 Individual check packages determine whether a condition matches and provide the finding message. The tier runner assigns the final finding level: `INFORM`, `ALERT`, or `BLOCK`.
 
 ## Artifact Download Inspection
 
-Normal commands remain metadata-only. `--inspect` selects the npm tarball or the highest-priority compatible non-yanked PyPI wheel, falling back to a non-yanked sdist. Metadata `BLOCK` findings skip download.
+Normal commands remain metadata-only. `--inspect` selects the npm tarball or the highest-priority compatible non-yanked PyPI wheel, falling back to a non-yanked sdist. Metadata `BLOCK` findings skip download and archive inspection.
 
-Downloads stream to a mode-`0600` OS temporary file, are limited to 100 MiB, require a trusted SHA-256 or SHA-512 registry digest, and verify any available expected size. Missing or mismatched verification data is an operational error. The file is deleted before output or error return; extraction and content scanning are deferred.
+Downloads stream to a mode-`0600` OS temporary file, are limited to 100 MiB, require a trusted SHA-256 or SHA-512 registry digest, and verify any available expected size. Missing or mismatched verification data is an operational error.
+
+After verification, SourceGate reads supported archive metadata for npm `.tgz` tarballs and PyPI `.whl`, `.zip`, `.tar.gz`, and `.tgz` artifacts. It records inventory counts, compressed and uncompressed size metrics, path depth, duplicate paths, and nested archive count. It emits policy findings for unsafe paths, file-count thresholds, uncompressed-size thresholds, and expansion-ratio thresholds. Unsupported verified archive formats are operational errors in `--inspect` mode.
+
+Archive inspection does not extract files, execute code, invoke package managers, or follow links. Source content scanning, build-surface detection, embedded-binary analysis, and suspicious string detection are deferred.
 
 ## Debug Evaluation Trace
 
@@ -153,7 +162,8 @@ SourceGate currently does not:
 - Install packages.
 - Invoke package managers.
 - Execute lifecycle scripts.
-- Unpack or scan package archives.
+- Extract package archives.
+- Scan package source code or binary contents.
 - Perform runtime malware analysis.
 - Enforce final allow/block decisions beyond reporting findings.
 

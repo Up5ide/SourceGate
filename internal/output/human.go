@@ -56,6 +56,26 @@ func RenderHuman(w io.Writer, pkg report.PackageReport) {
 			fmt.Fprintf(w, "  Digest: %s verified=%t\n", valueOrUnknown(pkg.ArtifactDownload.DigestAlgorithm), pkg.ArtifactDownload.DigestVerified)
 		}
 	}
+	if pkg.ArtifactInspection != nil {
+		fmt.Fprintln(w, "Artifact Inspection:")
+		fmt.Fprintf(w, "  Status: %s\n", pkg.ArtifactInspection.Status)
+		fmt.Fprintf(w, "  Archive Format: %s\n", valueOrUnknown(pkg.ArtifactInspection.ArchiveFormat))
+		fmt.Fprintf(w, "  Files: %d\n", pkg.ArtifactInspection.FileCount)
+		fmt.Fprintf(w, "  Directories: %d\n", pkg.ArtifactInspection.DirectoryCount)
+		fmt.Fprintf(w, "  Symlinks: %d\n", pkg.ArtifactInspection.SymlinkCount)
+		fmt.Fprintf(w, "  Hardlinks: %d\n", pkg.ArtifactInspection.HardlinkCount)
+		fmt.Fprintf(w, "  Total Uncompressed Size: %d bytes\n", pkg.ArtifactInspection.TotalUncompressedBytes)
+		fmt.Fprintf(w, "  Compressed Size: %d bytes\n", pkg.ArtifactInspection.CompressedBytes)
+		if pkg.ArtifactInspection.ExpansionRatioApplicable {
+			fmt.Fprintf(w, "  Expansion Ratio: %.2f\n", pkg.ArtifactInspection.ExpansionRatio)
+		} else {
+			fmt.Fprintln(w, "  Expansion Ratio: not evaluated")
+		}
+		fmt.Fprintf(w, "  Max Path Depth: %d\n", pkg.ArtifactInspection.MaxPathDepth)
+		fmt.Fprintf(w, "  Duplicate Paths: %d\n", pkg.ArtifactInspection.DuplicatePathCount)
+		fmt.Fprintf(w, "  Nested Archives: %d\n", pkg.ArtifactInspection.NestedArchiveCount)
+		fmt.Fprintf(w, "  Unsafe Paths: %d\n", pkg.ArtifactInspection.UnsafePathCount)
+	}
 
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Decision: %s\n", decisionOrInspectOnly(pkg.Decision))

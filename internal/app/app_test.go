@@ -1,16 +1,21 @@
 package app
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -181,7 +186,7 @@ func TestRunDebugDoesNotChangePyPIFetchBehavior(t *testing.T) {
 }
 
 func TestRunInspectDownloadsVerifiedArtifactAndDeletesTempFile(t *testing.T) {
-	content := []byte("npm artifact")
+	content := testTarGzip(t, "package/index.js", []byte("npm artifact"))
 	sum := sha512.Sum512(content)
 	var artifactRequests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -229,11 +234,154 @@ func TestRunInspectDownloadsVerifiedArtifactAndDeletesTempFile(t *testing.T) {
 	if artifactRequests != 1 || result.Report.ArtifactDownload == nil || result.Report.ArtifactDownload.Status != report.ArtifactDownloadStatusVerified {
 		t.Fatalf("artifact requests = %d summary = %+v, want verified download", artifactRequests, result.Report.ArtifactDownload)
 	}
+	if result.Report.ArtifactInspection == nil || result.Report.ArtifactInspection.ArchiveFormat != "tar.gz" || result.Report.ArtifactInspection.FileCount != 1 {
+		t.Fatalf("artifact inspection = %+v, want tar.gz inventory", result.Report.ArtifactInspection)
+	}
 	if entries, err := os.ReadDir(tempDirectory); err != nil || len(entries) != 0 {
 		t.Fatalf("temporary directory entries = %v error = %v, want empty", entries, err)
 	}
-	if !strings.Contains(out.String(), "Status: DOWNLOADED_VERIFIED") {
-		t.Fatalf("output missing artifact status:\n%s", out.String())
+	if !strings.Contains(out.String(), "Status: DOWNLOADED_VERIFIED") || !strings.Contains(out.String(), "Artifact Inspection:") {
+		t.Fatalf("output missing artifact status or inspection:\n%s", out.String())
+	}
+}
+
+func TestRunInspectAppliesArchivePolicyFindings(t *testing.T) {
+	content := testTarGzip(t, "../evil.js", []byte("bad"))
+	sum := sha512.Sum512(content)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pkg":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"name": "pkg",
+				"dist-tags": {"latest": "1.0.0"},
+				"time": {"1.0.0": "2021-02-20T15:42:16.891Z"},
+				"versions": {"1.0.0": {"dist": {
+					"tarball": "` + serverURLPlaceholder + `/artifact.tgz",
+					"integrity": "sha512-` + base64.StdEncoding.EncodeToString(sum[:]) + `"
+				}}}
+			}`))
+		case "/artifact.tgz":
+			w.Write(content)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	workspace := t.TempDir()
+	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{
+		Block: config.PolicyTierConfig{ArtifactUnsafePaths: true},
+	}})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, config.DefaultPath), configData, 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	withWorkingDirectory(t, workspace)
+
+	result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitBlockFinding || result.Report.Decision != report.DecisionBlock {
+		t.Fatalf("exit = %d decision = %q, want archive policy block", result.ExitCode, result.Report.Decision)
+	}
+	if !hasFindingContaining(result.Report.Findings, "unsafe path") {
+		t.Fatalf("findings = %+v, want unsafe path finding", result.Report.Findings)
+	}
+}
+
+func TestRunInspectPyPISdistArtifact(t *testing.T) {
+	content := testTarGzip(t, "requests/__init__.py", []byte("python"))
+	sum := sha256.Sum256(content)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/requests/json":
+			w.Write([]byte(`{
+				"info": {"name": "requests", "version": "2.0.0", "requires_dist": []},
+				"releases": {
+					"2.0.0": [{
+						"filename": "requests-2.0.0.tar.gz",
+						"packagetype": "sdist",
+						"size": ` + strconv.Itoa(len(content)) + `,
+						"url": "` + serverURLPlaceholder + `/requests-2.0.0.tar.gz",
+						"digests": {"sha256": "` + hex.EncodeToString(sum[:]) + `"},
+						"upload_time_iso_8601": "2026-01-01T00:00:00Z"
+					}]
+				}
+			}`))
+		case "/requests-2.0.0.tar.gz":
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Write(content)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldBase := pypi.BaseURL
+	pypi.BaseURL = server.URL
+	defer func() { pypi.BaseURL = oldBase }()
+
+	withWorkingDirectory(t, t.TempDir())
+	result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "pip", "install", "requests"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Report.ArtifactInspection == nil || result.Report.ArtifactInspection.ArchiveFormat != "tar.gz" || result.Report.ArtifactDownload.PackageType != "sdist" {
+		t.Fatalf("report = %+v, want inspected PyPI sdist", result.Report)
+	}
+}
+
+func TestRunInspectUnsupportedVerifiedArtifactReturnsOperationalError(t *testing.T) {
+	content := []byte("not an archive")
+	sum := sha512.Sum512(content)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pkg":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"name": "pkg",
+				"dist-tags": {"latest": "1.0.0"},
+				"time": {"1.0.0": "2021-02-20T15:42:16.891Z"},
+				"versions": {"1.0.0": {"dist": {
+					"tarball": "` + serverURLPlaceholder + `/artifact.bin",
+					"integrity": "sha512-` + base64.StdEncoding.EncodeToString(sum[:]) + `"
+				}}}
+			}`))
+		case "/artifact.bin":
+			w.Write(content)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	tempDirectory := t.TempDir()
+	t.Setenv("TMP", tempDirectory)
+	t.Setenv("TEMP", tempDirectory)
+	withWorkingDirectory(t, t.TempDir())
+
+	result, err := New(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}).Run(context.Background(), []string{"--inspect", "npm", "install", "pkg"})
+	if err == nil {
+		t.Fatalf("Run returned nil error")
+	}
+	if result.ExitCode != ExitOperationalError {
+		t.Fatalf("exit code = %d, want operational error", result.ExitCode)
+	}
+	if entries, err := os.ReadDir(tempDirectory); err != nil || len(entries) != 0 {
+		t.Fatalf("temporary directory entries = %v error = %v, want empty", entries, err)
 	}
 }
 
@@ -421,4 +569,38 @@ func withWorkingDirectory(t *testing.T, directory string) {
 			t.Fatalf("restore working directory: %v", err)
 		}
 	})
+}
+
+func testTarGzip(t *testing.T, name string, content []byte) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	gzipWriter := gzip.NewWriter(&buffer)
+	tarWriter := tar.NewWriter(gzipWriter)
+	header := &tar.Header{
+		Name: name,
+		Mode: 0600,
+		Size: int64(len(content)),
+	}
+	if err := tarWriter.WriteHeader(header); err != nil {
+		t.Fatalf("write tar header: %v", err)
+	}
+	if _, err := tarWriter.Write(content); err != nil {
+		t.Fatalf("write tar content: %v", err)
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	return buffer.Bytes()
+}
+
+func hasFindingContaining(findings []report.Finding, want string) bool {
+	for _, finding := range findings {
+		if strings.Contains(finding.Message, want) {
+			return true
+		}
+	}
+	return false
 }

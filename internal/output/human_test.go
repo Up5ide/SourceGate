@@ -105,8 +105,22 @@ func TestRenderHumanIncludesArtifactDownloadSummary(t *testing.T) {
 			DigestAlgorithm: "sha512",
 			DigestVerified:  true,
 		},
+		ArtifactInspection: &report.ArtifactInspectionSummary{
+			Status:                 report.ArtifactInspectionStatusInspected,
+			ArchiveFormat:          "tar.gz",
+			FileCount:              1,
+			DirectoryCount:         2,
+			SymlinkCount:           3,
+			HardlinkCount:          4,
+			TotalUncompressedBytes: 42,
+			CompressedBytes:        21,
+			MaxPathDepth:           2,
+			DuplicatePathCount:     1,
+			NestedArchiveCount:     1,
+			UnsafePathCount:        1,
+		},
 	})
-	for _, want := range []string{"Artifact Download:", "Status: DOWNLOADED_VERIFIED", "Filename: pkg.tgz", "Digest: sha512 verified=true"} {
+	for _, want := range []string{"Artifact Download:", "Status: DOWNLOADED_VERIFIED", "Filename: pkg.tgz", "Digest: sha512 verified=true", "Artifact Inspection:", "Archive Format: tar.gz", "Files: 1", "Unsafe Paths: 1"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, buf.String())
 		}

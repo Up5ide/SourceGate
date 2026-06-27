@@ -16,6 +16,7 @@ type Finding struct {
 const (
 	ArtifactDownloadStatusVerified       = "DOWNLOADED_VERIFIED"
 	ArtifactDownloadStatusSkippedBlocked = "SKIPPED_BLOCKED"
+	ArtifactInspectionStatusInspected    = "INSPECTED"
 )
 
 type ArtifactCandidate struct {
@@ -35,6 +36,24 @@ type ArtifactDownloadSummary struct {
 	DownloadedSize  int64  `json:"downloaded_size,omitempty"`
 	DigestAlgorithm string `json:"digest_algorithm,omitempty"`
 	DigestVerified  bool   `json:"digest_verified"`
+}
+
+type ArtifactInspectionSummary struct {
+	Status                   string   `json:"status"`
+	ArchiveFormat            string   `json:"archive_format"`
+	FileCount                int      `json:"file_count"`
+	DirectoryCount           int      `json:"directory_count"`
+	SymlinkCount             int      `json:"symlink_count"`
+	HardlinkCount            int      `json:"hardlink_count"`
+	TotalUncompressedBytes   int64    `json:"total_uncompressed_bytes"`
+	CompressedBytes          int64    `json:"compressed_bytes"`
+	ExpansionRatio           float64  `json:"expansion_ratio"`
+	MaxPathDepth             int      `json:"max_path_depth"`
+	DuplicatePathCount       int      `json:"duplicate_path_count"`
+	NestedArchiveCount       int      `json:"nested_archive_count"`
+	UnsafePathCount          int      `json:"unsafe_path_count,omitempty"`
+	UnsafePathExamples       []string `json:"unsafe_path_examples,omitempty"`
+	ExpansionRatioApplicable bool     `json:"-"`
 }
 
 type DebugTraceStatus string
@@ -112,32 +131,33 @@ type PyPIProvenanceSummary struct {
 }
 
 type PackageReport struct {
-	Ecosystem           string                    `json:"ecosystem"`
-	Registry            string                    `json:"registry"`
-	Name                string                    `json:"name"`
-	SelectedVersion     string                    `json:"selected_version"`
-	SelectedPublishedAt string                    `json:"selected_published_at"`
-	PreviousPublishedAt string                    `json:"previous_published_at"`
-	Description         string                    `json:"description"`
-	License             string                    `json:"license"`
-	Author              string                    `json:"author"`
-	Maintainers         []string                  `json:"maintainers"`
-	LifecycleScripts    map[string]string         `json:"lifecycle_scripts"`
-	LifecycleHistory    []VersionLifecycleScripts `json:"lifecycle_history"`
-	PyPISelectedRelease PyPIReleaseInfo           `json:"pypi_selected_release"`
-	PyPIReleaseHistory  []PyPIReleaseInfo         `json:"pypi_release_history"`
-	ProjectURLs         []string                  `json:"project_urls"`
-	CreatedAt           string                    `json:"created_at"`
-	ModifiedAt          string                    `json:"modified_at"`
-	VersionCount        int                       `json:"version_count"`
-	Warnings            []string                  `json:"warnings"`
-	NPMHistory          HistoryDiagnostics        `json:"npm_history"`
-	PyPIHistory         HistoryDiagnostics        `json:"pypi_history"`
-	PyPIProvenance      PyPIProvenanceSummary     `json:"pypi_provenance"`
-	PolicySummary       string                    `json:"policy_summary"`
-	Decision            Decision                  `json:"decision"`
-	Findings            []Finding                 `json:"findings"`
-	DebugTrace          []DebugTraceEntry         `json:"debug_trace,omitempty"`
-	ArtifactCandidate   ArtifactCandidate         `json:"-"`
-	ArtifactDownload    *ArtifactDownloadSummary  `json:"artifact_download,omitempty"`
+	Ecosystem           string                     `json:"ecosystem"`
+	Registry            string                     `json:"registry"`
+	Name                string                     `json:"name"`
+	SelectedVersion     string                     `json:"selected_version"`
+	SelectedPublishedAt string                     `json:"selected_published_at"`
+	PreviousPublishedAt string                     `json:"previous_published_at"`
+	Description         string                     `json:"description"`
+	License             string                     `json:"license"`
+	Author              string                     `json:"author"`
+	Maintainers         []string                   `json:"maintainers"`
+	LifecycleScripts    map[string]string          `json:"lifecycle_scripts"`
+	LifecycleHistory    []VersionLifecycleScripts  `json:"lifecycle_history"`
+	PyPISelectedRelease PyPIReleaseInfo            `json:"pypi_selected_release"`
+	PyPIReleaseHistory  []PyPIReleaseInfo          `json:"pypi_release_history"`
+	ProjectURLs         []string                   `json:"project_urls"`
+	CreatedAt           string                     `json:"created_at"`
+	ModifiedAt          string                     `json:"modified_at"`
+	VersionCount        int                        `json:"version_count"`
+	Warnings            []string                   `json:"warnings"`
+	NPMHistory          HistoryDiagnostics         `json:"npm_history"`
+	PyPIHistory         HistoryDiagnostics         `json:"pypi_history"`
+	PyPIProvenance      PyPIProvenanceSummary      `json:"pypi_provenance"`
+	PolicySummary       string                     `json:"policy_summary"`
+	Decision            Decision                   `json:"decision"`
+	Findings            []Finding                  `json:"findings"`
+	DebugTrace          []DebugTraceEntry          `json:"debug_trace,omitempty"`
+	ArtifactCandidate   ArtifactCandidate          `json:"-"`
+	ArtifactDownload    *ArtifactDownloadSummary   `json:"artifact_download,omitempty"`
+	ArtifactInspection  *ArtifactInspectionSummary `json:"artifact_inspection,omitempty"`
 }

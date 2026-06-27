@@ -16,6 +16,10 @@
       "pypi_provenance_scope": false,
       "pypi_include_optional_dependencies": false,
       "pypi_release_file_count_change": false,
+      "artifact_unsafe_paths": false,
+      "artifact_max_file_count": false,
+      "artifact_max_uncompressed_size_mb": false,
+      "artifact_max_expansion_ratio": false,
       "protected_packages": false,
       "protected_tokens": false
     },
@@ -35,6 +39,10 @@
       "pypi_provenance_scope": "install-target",
       "pypi_include_optional_dependencies": false,
       "pypi_release_file_count_change": true,
+      "artifact_unsafe_paths": false,
+      "artifact_max_file_count": false,
+      "artifact_max_uncompressed_size_mb": false,
+      "artifact_max_expansion_ratio": false,
       "protected_packages": {
         "npm": ["react", "lodash", "@tanstack/react-query"],
         "pypi": ["requests", "django"]
@@ -57,6 +65,10 @@
       "pypi_provenance_scope": false,
       "pypi_include_optional_dependencies": false,
       "pypi_release_file_count_change": false,
+      "artifact_unsafe_paths": true,
+      "artifact_max_file_count": 20000,
+      "artifact_max_uncompressed_size_mb": 1024,
+      "artifact_max_expansion_ratio": 100,
       "protected_packages": false,
       "protected_tokens": false
     }

@@ -50,6 +50,10 @@ type PolicyTierConfig struct {
 	PyPIProvenanceScope             string              `json:"pypi_provenance_scope"`
 	PyPIIncludeOptionalDependencies bool                `json:"pypi_include_optional_dependencies"`
 	PyPIReleaseFileCountChange      bool                `json:"pypi_release_file_count_change"`
+	ArtifactUnsafePaths             bool                `json:"artifact_unsafe_paths"`
+	ArtifactMaxFileCount            int                 `json:"artifact_max_file_count"`
+	ArtifactMaxUncompressedSizeMB   int                 `json:"artifact_max_uncompressed_size_mb"`
+	ArtifactMaxExpansionRatio       int                 `json:"artifact_max_expansion_ratio"`
 	ProtectedPackages               map[string][]string `json:"protected_packages"`
 	ProtectedTokens                 map[string][]string `json:"protected_tokens"`
 }
@@ -106,6 +110,14 @@ func (policy *PolicyTierConfig) UnmarshalJSON(data []byte) error {
 			policy.PyPIIncludeOptionalDependencies, err = boolValue(field, raw)
 		case "pypi_release_file_count_change":
 			policy.PyPIReleaseFileCountChange, err = boolValue(field, raw)
+		case "artifact_unsafe_paths":
+			policy.ArtifactUnsafePaths, err = boolValue(field, raw)
+		case "artifact_max_file_count":
+			policy.ArtifactMaxFileCount, err = intOrFalse(field, raw)
+		case "artifact_max_uncompressed_size_mb":
+			policy.ArtifactMaxUncompressedSizeMB, err = intOrFalse(field, raw)
+		case "artifact_max_expansion_ratio":
+			policy.ArtifactMaxExpansionRatio, err = intOrFalse(field, raw)
 		case "protected_packages":
 			policy.ProtectedPackages, err = ecosystemListMapOrFalse(field, raw)
 		case "protected_tokens":
@@ -279,6 +291,15 @@ func validatePolicyTier(tier string, policy PolicyTierConfig) error {
 	}
 	if policy.PyPIFileSizeJumpPercent < 0 {
 		return fmt.Errorf("policy.%s.pypi_file_size_jump_percent cannot be negative", tier)
+	}
+	if policy.ArtifactMaxFileCount < 0 {
+		return fmt.Errorf("policy.%s.artifact_max_file_count cannot be negative", tier)
+	}
+	if policy.ArtifactMaxUncompressedSizeMB < 0 {
+		return fmt.Errorf("policy.%s.artifact_max_uncompressed_size_mb cannot be negative", tier)
+	}
+	if policy.ArtifactMaxExpansionRatio < 0 {
+		return fmt.Errorf("policy.%s.artifact_max_expansion_ratio cannot be negative", tier)
 	}
 	if policy.InstallScriptAddedAfterDormancy {
 		if policy.InstallLifecycleHistoryVersions <= 0 {

@@ -536,6 +536,53 @@ func TestEvaluateInstallTargetCompatibilityFailureKeepsKnownProvenanceFindings(t
 	}
 }
 
+func TestEvaluateArtifactInspectionAddsFindingsAndDecision(t *testing.T) {
+	pkg := report.PackageReport{
+		Decision: report.DecisionAllow,
+		ArtifactInspection: &report.ArtifactInspectionSummary{
+			ArchiveFormat:            "tar.gz",
+			FileCount:                3,
+			TotalUncompressedBytes:   2 * 1024 * 1024,
+			CompressedBytes:          1024,
+			ExpansionRatio:           2048,
+			ExpansionRatioApplicable: true,
+			UnsafePathCount:          1,
+			UnsafePathExamples:       []string{"path traversal: ../evil.js"},
+		},
+	}
+	cfg := config.Config{Policy: config.PolicyConfig{
+		Inform: config.PolicyTierConfig{ArtifactMaxFileCount: 2},
+		Alert:  config.PolicyTierConfig{ArtifactMaxUncompressedSizeMB: 1},
+		Block:  config.PolicyTierConfig{ArtifactUnsafePaths: true, ArtifactMaxExpansionRatio: 100},
+	}}
+
+	EvaluateArtifactInspection(&pkg, cfg, EvaluationOptions{Debug: true})
+
+	if pkg.Decision != report.DecisionBlock {
+		t.Fatalf("decision = %q, want BLOCK", pkg.Decision)
+	}
+	if !hasFindingWithSeverity(pkg.Findings, levelBlock) || !hasFindingWithSeverity(pkg.Findings, levelAlert) || !hasFindingWithSeverity(pkg.Findings, levelInform) {
+		t.Fatalf("findings = %+v, want findings across configured tiers", pkg.Findings)
+	}
+	trace := findTrace(t, pkg.DebugTrace, "artifact_unsafe_paths")
+	if trace.Status != report.DebugTraceMatch || trace.Severity != levelBlock || !containsEvidence(trace, "../evil.js") {
+		t.Fatalf("trace = %+v, want block match with unsafe path evidence", trace)
+	}
+}
+
+func TestEvaluateArtifactInspectionLeavesMetadataOnlyEvaluationUnchanged(t *testing.T) {
+	pkg := report.PackageReport{}
+	cfg := config.Config{Policy: config.PolicyConfig{
+		Block: config.PolicyTierConfig{ArtifactUnsafePaths: true},
+	}}
+
+	EvaluateWithOptions(&pkg, cfg, time.Now(), EvaluationOptions{})
+
+	if pkg.Decision != report.DecisionInspectOnly || len(pkg.Findings) != 0 || pkg.PolicySummary != "" {
+		t.Fatalf("pkg = %+v, want metadata-only evaluation unchanged by artifact policy", pkg)
+	}
+}
+
 func hasFindingWithSeverity(findings []report.Finding, severity string) bool {
 	for _, finding := range findings {
 		if finding.Severity == severity {

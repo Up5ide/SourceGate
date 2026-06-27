@@ -44,6 +44,10 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
       "pypi_provenance_scope": false,
       "pypi_include_optional_dependencies": false,
       "pypi_release_file_count_change": false,
+      "artifact_unsafe_paths": false,
+      "artifact_max_file_count": false,
+      "artifact_max_uncompressed_size_mb": false,
+      "artifact_max_expansion_ratio": false,
       "protected_packages": false,
       "protected_tokens": false
     },
@@ -63,6 +67,10 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
       "pypi_provenance_scope": "install-target",
       "pypi_include_optional_dependencies": false,
       "pypi_release_file_count_change": true,
+      "artifact_unsafe_paths": false,
+      "artifact_max_file_count": false,
+      "artifact_max_uncompressed_size_mb": false,
+      "artifact_max_expansion_ratio": false,
       "protected_packages": {
         "npm": ["react", "lodash", "@tanstack/react-query"],
         "pypi": ["requests", "django"]
@@ -85,6 +93,10 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
       "pypi_provenance_scope": false,
       "pypi_include_optional_dependencies": false,
       "pypi_release_file_count_change": false,
+      "artifact_unsafe_paths": true,
+      "artifact_max_file_count": 20000,
+      "artifact_max_uncompressed_size_mb": 1024,
+      "artifact_max_expansion_ratio": 100,
       "protected_packages": false,
       "protected_tokens": false
     }
@@ -117,6 +129,10 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 | `pypi_provenance_scope` | string or `false` | Required with `pypi_provenance_required`; accepts `install-target`, `all-artifacts`, or `sdist-only`. |
 | `pypi_include_optional_dependencies` | boolean | Include PyPI optional `extra` dependency names in dependency-change evaluation. |
 | `pypi_release_file_count_change` | boolean | `true` enables PyPI release file count change findings. |
+| `artifact_unsafe_paths` | boolean | `true` enables unsafe archive path findings during `--inspect`. |
+| `artifact_max_file_count` | integer or `false` | Maximum regular file count in the inspected archive. |
+| `artifact_max_uncompressed_size_mb` | integer or `false` | Maximum total uncompressed archive size in MiB. |
+| `artifact_max_expansion_ratio` | integer or `false` | Maximum archive expansion ratio when ratio evaluation applies. |
 | `protected_packages` | map or `false` | Map keyed by ecosystem; `false` disables protected package checks for the tier. |
 | `protected_tokens` | map or `false` | Map keyed by ecosystem; `false` disables protected token checks for the tier. |
 
@@ -130,7 +146,7 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 
 ## npm Lifecycle Checks
 
-These checks use npm registry metadata only and do not execute lifecycle scripts. The separate runtime `--inspect` mode may download the selected npm tarball after metadata policy evaluation.
+These checks use npm registry metadata only and do not execute lifecycle scripts. The separate runtime `--inspect` mode may download and archive-inspect the selected npm tarball after metadata policy evaluation.
 
 `install_lifecycle_scripts` emits npm-only findings when the selected package metadata declares install-relevant lifecycle scripts such as `preinstall`, `install`, `postinstall`, `prepublish`, `prepare`, `preprepare`, or `postprepare`.
 
@@ -142,7 +158,7 @@ These checks use npm registry metadata only and do not execute lifecycle scripts
 
 ## PyPI Artifact And Provenance Checks
 
-These checks use PyPI metadata, release-file metadata, version-specific metadata, and the PyPI Integrity API when provenance checks are enabled. The separate runtime `--inspect` mode may download one selected install-target artifact after metadata policy evaluation.
+These checks use PyPI metadata, release-file metadata, version-specific metadata, and the PyPI Integrity API when provenance checks are enabled. The separate runtime `--inspect` mode may download and archive-inspect one selected install-target artifact after metadata policy evaluation.
 
 `pypi_artifact_history_versions` controls how many previous PyPI releases are available to history-dependent checks. Artifact size and file-count checks use the configured historical window. Dependency changes compare only the immediate previous eligible release.
 
@@ -161,6 +177,22 @@ These checks use PyPI metadata, release-file metadata, version-specific metadata
 When `install-target` is enabled, SourceGate runs local `<python> -m pip debug --verbose` to resolve Python compatibility tags. It does not install packages. If tag inspection fails, SourceGate prints a non-policy warning, checks source distributions whose scope is still known, and marks compatible-wheel provenance evaluation indeterminate. It does not guess wheel compatibility from an explicit platform or the SourceGate host.
 
 `pypi_release_file_count_change` emits PyPI-only findings when the selected release file count differs from the historical median.
+
+## Artifact Archive Safety Checks
+
+These checks run only with `--inspect`, after the selected artifact is downloaded to a temporary file and its registry digest is verified. SourceGate reads archive metadata without extracting files, executing code, invoking package managers, or following links.
+
+Supported archive formats are npm `.tgz` tarballs and PyPI `.whl`, `.zip`, `.tar.gz`, and `.tgz` artifacts. Unsupported verified artifact formats are operational errors in `--inspect` mode because archive safety cannot be evaluated.
+
+`artifact_unsafe_paths` emits findings for path traversal, absolute paths, Windows drive or UNC paths, NUL bytes, duplicate normalized paths, and symlink or hardlink targets that escape the archive root. Symlinks and hardlinks are counted in inventory but are not findings by themselves when their targets stay inside the archive root.
+
+`artifact_max_file_count` emits findings when the inspected archive contains more regular files than the configured threshold.
+
+`artifact_max_uncompressed_size_mb` emits findings when the sum of uncompressed regular file sizes exceeds the configured MiB threshold.
+
+`artifact_max_expansion_ratio` emits findings when the uncompressed-to-compressed size ratio exceeds the configured threshold. Ratio evaluation only applies when compressed size is known and total uncompressed size is at least 10 MiB.
+
+The checked-in defaults put hard archive safety limits in the `block` tier: unsafe paths are blocked, file count is limited to `20000`, uncompressed size to `1024` MiB, and expansion ratio to `100`. Users can move the same options to `inform` or `alert`, or disable them, based on their tolerance.
 
 ## Name Protection
 
@@ -202,6 +234,9 @@ Numeric threshold values accept non-negative integers or `false`; negative value
 - `install_lifecycle_history_versions`
 - `pypi_artifact_history_versions`
 - `pypi_file_size_jump_percent`
+- `artifact_max_file_count`
+- `artifact_max_uncompressed_size_mb`
+- `artifact_max_expansion_ratio`
 
 `protected_packages` and `protected_tokens` only accept `npm` and `pypi` ecosystem keys, and entries cannot be empty strings.
 
