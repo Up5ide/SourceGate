@@ -79,6 +79,10 @@ func RenderHuman(w io.Writer, pkg report.PackageReport) {
 		for _, surface := range pkg.ArtifactInspection.ExecutionSurfaceExamples {
 			fmt.Fprintf(w, "    - %s\n", executionSurfaceDisplay(surface))
 		}
+		fmt.Fprintf(w, "  Suspicious File Types: %d\n", pkg.ArtifactInspection.SuspiciousFileTypeCount)
+		for _, fileType := range pkg.ArtifactInspection.SuspiciousFileTypeExamples {
+			fmt.Fprintf(w, "    - %s\n", suspiciousFileTypeDisplay(fileType))
+		}
 	}
 
 	fmt.Fprintln(w)
@@ -123,6 +127,14 @@ func executionSurfaceDisplay(surface report.ArtifactExecutionSurface) string {
 	}
 	if strings.TrimSpace(surface.Detail) != "" {
 		parts = append(parts, surface.Detail)
+	}
+	return strings.Join(parts, " ")
+}
+
+func suspiciousFileTypeDisplay(fileType report.ArtifactSuspiciousFileType) string {
+	parts := []string{fileType.Type, fileType.Path, fileType.Reason}
+	if strings.TrimSpace(fileType.Detail) != "" {
+		parts = append(parts, fileType.Detail)
 	}
 	return strings.Join(parts, " ")
 }

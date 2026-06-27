@@ -49,6 +49,7 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
       "artifact_max_uncompressed_size_mb": false,
       "artifact_max_expansion_ratio": false,
       "artifact_execution_surfaces": false,
+      "artifact_suspicious_file_types": false,
       "protected_packages": false,
       "protected_tokens": false
     },
@@ -73,6 +74,7 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
       "artifact_max_uncompressed_size_mb": false,
       "artifact_max_expansion_ratio": false,
       "artifact_execution_surfaces": true,
+      "artifact_suspicious_file_types": true,
       "protected_packages": {
         "npm": ["react", "lodash", "@tanstack/react-query"],
         "pypi": ["requests", "django"]
@@ -100,6 +102,7 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
       "artifact_max_uncompressed_size_mb": 1024,
       "artifact_max_expansion_ratio": 100,
       "artifact_execution_surfaces": false,
+      "artifact_suspicious_file_types": false,
       "protected_packages": false,
       "protected_tokens": false
     }
@@ -137,6 +140,7 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 | `artifact_max_uncompressed_size_mb` | integer or `false` | Maximum total uncompressed archive size in MiB. |
 | `artifact_max_expansion_ratio` | integer or `false` | Maximum archive expansion ratio when ratio evaluation applies. |
 | `artifact_execution_surfaces` | boolean | `true` enables install/build execution-surface findings during `--inspect`. |
+| `artifact_suspicious_file_types` | boolean | `true` enables native/executable file type findings during `--inspect`. |
 | `protected_packages` | map or `false` | Map keyed by ecosystem; `false` disables protected package checks for the tier. |
 | `protected_tokens` | map or `false` | Map keyed by ecosystem; `false` disables protected token checks for the tier. |
 
@@ -198,7 +202,9 @@ Supported archive formats are npm `.tgz` tarballs and PyPI `.whl`, `.zip`, `.tar
 
 `artifact_execution_surfaces` emits findings when bounded artifact metadata exposes install/build execution surfaces. It detects npm install lifecycle scripts, npm `bin` entries, npm native build hints, PyPI build files, PyPI build backends, PyPI wheel entry points, `.pth` startup files, wheel `.data/scripts/*`, and common shell/build files. Metadata reads are capped at 256 KiB per file and 1 MiB total per artifact.
 
-The checked-in defaults put hard archive safety limits in the `block` tier: unsafe paths are blocked, file count is limited to `20000`, uncompressed size to `1024` MiB, and expansion ratio to `100`. The checked-in default enables `artifact_execution_surfaces` in the `alert` tier because these surfaces can be legitimate but are important to review. Users can move the same options to `inform` or `block`, or disable them, based on their tolerance.
+`artifact_suspicious_file_types` emits findings when archive entries look like native/executable content by extension or bounded magic-byte inspection. It detects Windows PE files, ELF, Mach-O, WebAssembly modules, Java class bytecode, native extension files such as `.node` and `.pyd`, shared libraries, object/static libraries, and installer/package formats such as `.msi`, `.deb`, `.rpm`, `.apk`, `.dmg`, and `.pkg`. SourceGate reads only a small file prefix for magic signatures and reports at most one suspicious type per file, preferring magic-byte evidence over extension evidence.
+
+The checked-in defaults put hard archive safety limits in the `block` tier: unsafe paths are blocked, file count is limited to `20000`, uncompressed size to `1024` MiB, and expansion ratio to `100`. The checked-in default enables `artifact_execution_surfaces` and `artifact_suspicious_file_types` in the `alert` tier because these signals can be legitimate but are important to review. Users can move the same options to `inform` or `block`, or disable them, based on their tolerance.
 
 ## Name Protection
 

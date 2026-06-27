@@ -83,6 +83,10 @@ func TestRenderJSONIncludesArtifactSummaryButNotInternalCandidate(t *testing.T) 
 			ExecutionSurfaceExamples: []report.ArtifactExecutionSurface{
 				{Type: "pypi_build_file", Path: "pkg/setup.py", Name: "setup.py"},
 			},
+			SuspiciousFileTypeCount: 1,
+			SuspiciousFileTypeExamples: []report.ArtifactSuspiciousFileType{
+				{Type: "python_native_extension", Path: "pkg/native.pyd", Reason: "extension", Detail: ".pyd"},
+			},
 		},
 	})
 	if err != nil {
@@ -92,6 +96,8 @@ func TestRenderJSONIncludesArtifactSummaryButNotInternalCandidate(t *testing.T) 
 		!strings.Contains(buf.String(), "\"artifact_inspection\"") ||
 		!strings.Contains(buf.String(), "\"execution_surface_examples\"") ||
 		!strings.Contains(buf.String(), "\"pypi_build_file\"") ||
+		!strings.Contains(buf.String(), "\"suspicious_file_type_examples\"") ||
+		!strings.Contains(buf.String(), "\"python_native_extension\"") ||
 		strings.Contains(buf.String(), "secret.example") ||
 		strings.Contains(buf.String(), "artifact_candidate") {
 		t.Fatalf("JSON artifact fields incorrect:\n%s", buf.String())

@@ -21,6 +21,7 @@
       "artifact_max_uncompressed_size_mb": false,
       "artifact_max_expansion_ratio": false,
       "artifact_execution_surfaces": false,
+      "artifact_suspicious_file_types": false,
       "protected_packages": false,
       "protected_tokens": false
     },
@@ -45,6 +46,7 @@
       "artifact_max_uncompressed_size_mb": false,
       "artifact_max_expansion_ratio": false,
       "artifact_execution_surfaces": true,
+      "artifact_suspicious_file_types": true,
       "protected_packages": {
         "npm": ["react", "lodash", "@tanstack/react-query"],
         "pypi": ["requests", "django"]
@@ -72,6 +74,7 @@
       "artifact_max_uncompressed_size_mb": 1024,
       "artifact_max_expansion_ratio": 100,
       "artifact_execution_surfaces": false,
+      "artifact_suspicious_file_types": false,
       "protected_packages": false,
       "protected_tokens": false
     }

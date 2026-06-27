@@ -20,8 +20,8 @@ func TestFetchMetadata(t *testing.T) {
 		if r.URL.Path != "/requests/json" {
 			t.Fatalf("path = %q, want /requests/json", r.URL.Path)
 		}
-		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.7.1" {
-			t.Fatalf("user agent = %q, want sourcegate/0.7.1", got)
+		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.7.2" {
+			t.Fatalf("user agent = %q, want sourcegate/0.7.2", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
@@ -311,8 +311,8 @@ func provenanceFixtureFiles() []report.PyPIReleaseFile {
 
 func TestFetchMetadataWithArtifactOptions(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.7.1" {
-			t.Fatalf("user agent = %q, want sourcegate/0.7.1", got)
+		if got := r.Header.Get("User-Agent"); got != "sourcegate/0.7.2" {
+			t.Fatalf("user agent = %q, want sourcegate/0.7.2", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {

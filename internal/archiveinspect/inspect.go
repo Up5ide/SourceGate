@@ -21,7 +21,9 @@ import (
 const minExpansionRatioBytes int64 = 10 * 1024 * 1024
 const maxMetadataFileBytes int64 = 256 * 1024
 const maxMetadataTotalBytes int64 = 1024 * 1024
+const maxMagicBytes int64 = 8
 const maxExecutionSurfaceExamples = 12
+const maxSuspiciousFileTypeExamples = 12
 
 func Inspect(artifactPath, filename string) (report.ArtifactInspectionSummary, error) {
 	stat, err := os.Stat(artifactPath)
@@ -140,7 +142,14 @@ func (inspector *archiveInspector) recordTarEntry(header *tar.Header, reader *ta
 				return err
 			}
 			inspector.metadataBytesRead += int64(len(content))
+			inspector.inspectSuspiciousFileType(normalized, content)
 			inspector.inspectMetadataExecutionSurfaces(normalized, content)
+		} else {
+			prefix, err := readTarPrefix(reader, header.Size)
+			if err != nil {
+				return err
+			}
+			inspector.inspectSuspiciousFileType(normalized, prefix)
 		}
 	default:
 		inspector.addUncompressedBytes(header.Size)
@@ -174,7 +183,14 @@ func (inspector *archiveInspector) recordZipEntry(file *zip.File) error {
 				return err
 			}
 			inspector.metadataBytesRead += int64(len(content))
+			inspector.inspectSuspiciousFileType(normalized, content)
 			inspector.inspectMetadataExecutionSurfaces(normalized, content)
+		} else {
+			prefix, err := readZipPrefix(file)
+			if err != nil {
+				return err
+			}
+			inspector.inspectSuspiciousFileType(normalized, prefix)
 		}
 	}
 	return nil
@@ -226,6 +242,16 @@ func (inspector *archiveInspector) addExecutionSurface(surface report.ArtifactEx
 	}
 }
 
+func (inspector *archiveInspector) addSuspiciousFileType(fileType report.ArtifactSuspiciousFileType) {
+	inspector.summary.SuspiciousFileTypeCount++
+	fileType.Path = displayPath(fileType.Path)
+	fileType.Reason = displayText(fileType.Reason)
+	fileType.Detail = displayText(fileType.Detail)
+	if len(inspector.summary.SuspiciousFileTypeExamples) < maxSuspiciousFileTypeExamples {
+		inspector.summary.SuspiciousFileTypeExamples = append(inspector.summary.SuspiciousFileTypeExamples, fileType)
+	}
+}
+
 func (inspector *archiveInspector) inspectPathExecutionSurfaces(normalized string) {
 	if normalized == "" {
 		return
@@ -248,6 +274,15 @@ func (inspector *archiveInspector) inspectPathExecutionSurfaces(normalized strin
 	}
 	if isScriptFile(lower) {
 		inspector.addExecutionSurface(report.ArtifactExecutionSurface{Type: "script_file", Path: normalized, Name: path.Base(normalized)})
+	}
+}
+
+func (inspector *archiveInspector) inspectSuspiciousFileType(normalized string, prefix []byte) {
+	if normalized == "" {
+		return
+	}
+	if fileType, ok := classifySuspiciousFileType(normalized, prefix); ok {
+		inspector.addSuspiciousFileType(fileType)
 	}
 }
 
@@ -525,6 +560,102 @@ func isScriptFile(lowerName string) bool {
 		strings.HasSuffix(lowerName, ".ps1")
 }
 
+func classifySuspiciousFileType(normalized string, prefix []byte) (report.ArtifactSuspiciousFileType, bool) {
+	if fileType, ok := suspiciousFileTypeByMagic(normalized, prefix); ok {
+		return fileType, true
+	}
+	return suspiciousFileTypeByExtension(normalized)
+}
+
+func suspiciousFileTypeByMagic(normalized string, prefix []byte) (report.ArtifactSuspiciousFileType, bool) {
+	switch {
+	case hasMagic(prefix, []byte{'M', 'Z'}):
+		return suspiciousFileType("pe_binary", normalized, "magic", "PE/MZ executable"), true
+	case hasMagic(prefix, []byte{0x7f, 'E', 'L', 'F'}):
+		return suspiciousFileType("elf_binary", normalized, "magic", "ELF executable or shared object"), true
+	case hasMagic(prefix, []byte{0x00, 'a', 's', 'm'}):
+		return suspiciousFileType("webassembly_binary", normalized, "magic", "WebAssembly module"), true
+	case hasAnyMagic(prefix,
+		[]byte{0xfe, 0xed, 0xfa, 0xce},
+		[]byte{0xfe, 0xed, 0xfa, 0xcf},
+		[]byte{0xce, 0xfa, 0xed, 0xfe},
+		[]byte{0xcf, 0xfa, 0xed, 0xfe},
+		[]byte{0xbe, 0xba, 0xfe, 0xca},
+	):
+		return suspiciousFileType("macho_binary", normalized, "magic", "Mach-O executable or library"), true
+	case hasMagic(prefix, []byte{0xca, 0xfe, 0xba, 0xbe}):
+		return suspiciousFileType("java_class", normalized, "magic", "Java class bytecode"), true
+	default:
+		return report.ArtifactSuspiciousFileType{}, false
+	}
+}
+
+func suspiciousFileTypeByExtension(normalized string) (report.ArtifactSuspiciousFileType, bool) {
+	lower := strings.ToLower(normalized)
+	base := path.Base(lower)
+	extension := path.Ext(base)
+	switch {
+	case extension == ".exe":
+		return suspiciousFileType("windows_executable", normalized, "extension", ".exe"), true
+	case extension == ".dll":
+		return suspiciousFileType("windows_library", normalized, "extension", ".dll"), true
+	case extension == ".so" || strings.Contains(base, ".so."):
+		return suspiciousFileType("shared_library", normalized, "extension", ".so"), true
+	case extension == ".dylib":
+		return suspiciousFileType("shared_library", normalized, "extension", ".dylib"), true
+	case extension == ".pyd":
+		return suspiciousFileType("python_native_extension", normalized, "extension", ".pyd"), true
+	case extension == ".node":
+		return suspiciousFileType("node_native_extension", normalized, "extension", ".node"), true
+	case extension == ".wasm":
+		return suspiciousFileType("webassembly_binary", normalized, "extension", ".wasm"), true
+	case extension == ".msi" || extension == ".deb" || extension == ".rpm" || extension == ".apk" || extension == ".dmg" || extension == ".pkg":
+		return suspiciousFileType("installer_or_package", normalized, "extension", extension), true
+	case extension == ".app":
+		return suspiciousFileType("macos_app_bundle", normalized, "extension", ".app"), true
+	case extension == ".o" || extension == ".obj":
+		return suspiciousFileType("object_file", normalized, "extension", extension), true
+	case extension == ".a" || extension == ".lib":
+		return suspiciousFileType("static_library", normalized, "extension", extension), true
+	default:
+		return report.ArtifactSuspiciousFileType{}, false
+	}
+}
+
+func suspiciousFileType(kind, normalized, reason, detail string) report.ArtifactSuspiciousFileType {
+	return report.ArtifactSuspiciousFileType{
+		Type:   kind,
+		Path:   normalized,
+		Reason: reason,
+		Detail: detail,
+	}
+}
+
+func hasAnyMagic(prefix []byte, signatures ...[]byte) bool {
+	for _, signature := range signatures {
+		if hasMagic(prefix, signature) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasMagic(prefix, signature []byte) bool {
+	return len(prefix) >= len(signature) && bytesEqual(prefix[:len(signature)], signature)
+}
+
+func bytesEqual(left, right []byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func readTarMetadata(reader *tar.Reader, size int64) ([]byte, error) {
 	content, err := io.ReadAll(io.LimitReader(reader, size))
 	if err != nil {
@@ -532,6 +663,21 @@ func readTarMetadata(reader *tar.Reader, size int64) ([]byte, error) {
 	}
 	if int64(len(content)) != size {
 		return nil, fmt.Errorf("inspect tar.gz artifact: metadata file ended early")
+	}
+	return content, nil
+}
+
+func readTarPrefix(reader *tar.Reader, size int64) ([]byte, error) {
+	if size <= 0 {
+		return nil, nil
+	}
+	limit := maxMagicBytes
+	if size < limit {
+		limit = size
+	}
+	content, err := io.ReadAll(io.LimitReader(reader, limit))
+	if err != nil {
+		return nil, fmt.Errorf("inspect tar.gz artifact: read file prefix: %w", err)
 	}
 	return content, nil
 }
@@ -548,6 +694,22 @@ func readZipMetadata(file *zip.File) ([]byte, error) {
 	}
 	if int64(len(content)) > maxMetadataFileBytes {
 		return nil, fmt.Errorf("inspect zip artifact: metadata %s exceeds read limit", file.Name)
+	}
+	return content, nil
+}
+
+func readZipPrefix(file *zip.File) ([]byte, error) {
+	if file.UncompressedSize64 == 0 {
+		return nil, nil
+	}
+	reader, err := file.Open()
+	if err != nil {
+		return nil, fmt.Errorf("inspect zip artifact: open file prefix %s: %w", file.Name, err)
+	}
+	defer reader.Close()
+	content, err := io.ReadAll(io.LimitReader(reader, maxMagicBytes))
+	if err != nil {
+		return nil, fmt.Errorf("inspect zip artifact: read file prefix %s: %w", file.Name, err)
 	}
 	return content, nil
 }

@@ -599,6 +599,40 @@ func TestEvaluateArtifactInspectionAddsExecutionSurfaceFinding(t *testing.T) {
 	}
 }
 
+func TestEvaluateArtifactInspectionAddsSuspiciousFileTypeFinding(t *testing.T) {
+	pkg := report.PackageReport{
+		Decision: report.DecisionAllow,
+		ArtifactInspection: &report.ArtifactInspectionSummary{
+			ArchiveFormat:           "zip",
+			SuspiciousFileTypeCount: 1,
+			SuspiciousFileTypeExamples: []report.ArtifactSuspiciousFileType{
+				{Type: "python_native_extension", Path: "pkg/native.pyd", Reason: "extension", Detail: ".pyd"},
+			},
+		},
+	}
+	disabled := pkg
+	EvaluateArtifactInspection(&disabled, config.Config{}, EvaluationOptions{})
+	if len(disabled.Findings) != 0 || disabled.Decision != report.DecisionAllow {
+		t.Fatalf("disabled pkg = %+v, want no artifact file type finding", disabled)
+	}
+
+	cfg := config.Config{Policy: config.PolicyConfig{
+		Alert: config.PolicyTierConfig{ArtifactSuspiciousFileTypes: true},
+	}}
+	EvaluateArtifactInspection(&pkg, cfg, EvaluationOptions{Debug: true})
+
+	if pkg.Decision != report.DecisionAllow {
+		t.Fatalf("decision = %q, want ALLOW", pkg.Decision)
+	}
+	if len(pkg.Findings) != 1 || pkg.Findings[0].Severity != levelAlert || !strings.Contains(pkg.Findings[0].Message, "native.pyd") {
+		t.Fatalf("findings = %+v, want alert suspicious file type finding", pkg.Findings)
+	}
+	trace := findTrace(t, pkg.DebugTrace, "artifact_suspicious_file_types")
+	if trace.Status != report.DebugTraceMatch || trace.Severity != levelAlert || !containsEvidence(trace, "native.pyd") {
+		t.Fatalf("trace = %+v, want alert match with file type evidence", trace)
+	}
+}
+
 func TestEvaluateArtifactInspectionLeavesMetadataOnlyEvaluationUnchanged(t *testing.T) {
 	pkg := report.PackageReport{}
 	cfg := config.Config{Policy: config.PolicyConfig{

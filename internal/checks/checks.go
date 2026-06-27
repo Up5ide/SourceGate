@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/sourcegate/sourcegate/internal/checks/artifactexecution"
+	"github.com/sourcegate/sourcegate/internal/checks/artifactfiletypes"
 	"github.com/sourcegate/sourcegate/internal/checks/artifactsafety"
 	"github.com/sourcegate/sourcegate/internal/checks/dormant"
 	"github.com/sourcegate/sourcegate/internal/checks/firstrelease"
@@ -474,6 +475,22 @@ func EvaluateArtifactInspection(pkg *report.PackageReport, cfg config.Config, op
 			return artifactexecution.CheckExecutionSurfaces(*pkg)
 		},
 	})
+	evaluate(debugPolicyCheck{
+		id:         "artifact_suspicious_file_types",
+		applicable: artifactApplicable,
+		enabled:    anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.ArtifactSuspiciousFileTypes }),
+		evidence: func() []string {
+			return append(artifactfiletypes.Evidence(*pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.ArtifactSuspiciousFileTypes
+			}))
+		},
+		check: func(policy config.PolicyTierConfig) []report.Finding {
+			if !policy.ArtifactSuspiciousFileTypes {
+				return nil
+			}
+			return artifactfiletypes.CheckSuspiciousFileTypes(*pkg)
+		},
+	})
 
 	if enabledPolicy {
 		if hasBlockFinding(pkg.Findings) {
@@ -627,7 +644,8 @@ func artifactPolicyEnabled(tiers []policyTier) bool {
 			policy.ArtifactMaxFileCount > 0 ||
 			policy.ArtifactMaxUncompressedSizeMB > 0 ||
 			policy.ArtifactMaxExpansionRatio > 0 ||
-			policy.ArtifactExecutionSurfaces
+			policy.ArtifactExecutionSurfaces ||
+			policy.ArtifactSuspiciousFileTypes
 	})
 }
 
@@ -769,6 +787,9 @@ func artifactPolicyTierSummary(policy config.PolicyTierConfig) string {
 	}
 	if policy.ArtifactExecutionSurfaces {
 		summaries = append(summaries, "artifact install/build execution surface checks enabled")
+	}
+	if policy.ArtifactSuspiciousFileTypes {
+		summaries = append(summaries, "artifact suspicious file type checks enabled")
 	}
 	return joinPolicySummaries(summaries)
 }

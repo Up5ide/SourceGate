@@ -32,6 +32,7 @@ func TestLoad(t *testing.T) {
 				"artifact_max_uncompressed_size_mb": false,
 				"artifact_max_expansion_ratio": false,
 				"artifact_execution_surfaces": false,
+				"artifact_suspicious_file_types": false,
 				"protected_packages": {},
 				"protected_tokens": {}
 			},
@@ -56,6 +57,7 @@ func TestLoad(t *testing.T) {
 				"artifact_max_uncompressed_size_mb": 256,
 				"artifact_max_expansion_ratio": 50,
 				"artifact_execution_surfaces": true,
+				"artifact_suspicious_file_types": true,
 				"protected_packages": {
 					"npm": ["react", "lodash"],
 					"pypi": ["requests", "django"]
@@ -86,6 +88,7 @@ func TestLoad(t *testing.T) {
 				"artifact_max_uncompressed_size_mb": 1024,
 				"artifact_max_expansion_ratio": 100,
 				"artifact_execution_surfaces": false,
+				"artifact_suspicious_file_types": false,
 				"protected_packages": {},
 				"protected_tokens": {}
 			}
@@ -164,6 +167,9 @@ func TestLoad(t *testing.T) {
 	}
 	if !config.Policy.Alert.ArtifactExecutionSurfaces {
 		t.Fatalf("alert artifact execution surfaces = false, want true")
+	}
+	if !config.Policy.Alert.ArtifactSuspiciousFileTypes {
+		t.Fatalf("alert artifact suspicious file types = false, want true")
 	}
 	if config.Policy.Block.DormantReleaseThresholdDays != 365 {
 		t.Fatalf("block dormant threshold days = %d, want 365", config.Policy.Block.DormantReleaseThresholdDays)
@@ -286,6 +292,7 @@ func TestLoadRejectsInvalidFlexiblePolicyValueTypes(t *testing.T) {
 		"number optional":  `{"policy":{"alert":{"pypi_include_optional_dependencies":1}}}`,
 		"number artifact":  `{"policy":{"alert":{"artifact_unsafe_paths":1}}}`,
 		"number execution": `{"policy":{"alert":{"artifact_execution_surfaces":1}}}`,
+		"number filetype":  `{"policy":{"alert":{"artifact_suspicious_file_types":1}}}`,
 		"array scope":      `{"policy":{"alert":{"pypi_provenance_scope":[]}}}`,
 		"unknown field":    `{"policy":{"alert":{"does_not_exist":false}}}`,
 	}

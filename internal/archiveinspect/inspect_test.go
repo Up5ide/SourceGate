@@ -131,6 +131,68 @@ func TestInspectPyPIExecutionSurfaces(t *testing.T) {
 	}
 }
 
+func TestInspectDetectsSuspiciousFileTypesByExtension(t *testing.T) {
+	path := writeTarGzip(t, []tarEntry{
+		{name: "package/build/addon.node", content: []byte("native")},
+		{name: "package/lib/libcrypto.so.3", content: []byte("shared")},
+		{name: "package/bin/tool.exe", content: []byte("binary")},
+	})
+
+	summary, err := Inspect(path, "pkg-1.0.0.tgz")
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	if summary.SuspiciousFileTypeCount != 3 {
+		t.Fatalf("suspicious file types = %+v, want 3", summary.SuspiciousFileTypeExamples)
+	}
+	for _, want := range []string{"node_native_extension:addon.node", "shared_library:libcrypto.so.3", "windows_executable:tool.exe"} {
+		if !containsSuspiciousFileType(summary.SuspiciousFileTypeExamples, want) {
+			t.Fatalf("suspicious file types = %+v, want %q", summary.SuspiciousFileTypeExamples, want)
+		}
+	}
+}
+
+func TestInspectDetectsSuspiciousFileTypesByMagic(t *testing.T) {
+	path := writeZip(t, []zipEntry{
+		{name: "pkg/bin/pe", content: []byte{'M', 'Z', 0, 0}},
+		{name: "pkg/bin/elf", content: []byte{0x7f, 'E', 'L', 'F', 0}},
+		{name: "pkg/bin/macho", content: []byte{0xfe, 0xed, 0xfa, 0xcf}},
+		{name: "pkg/bin/wasm", content: []byte{0x00, 'a', 's', 'm', 0x01, 0x00, 0x00, 0x00}},
+		{name: "pkg/bin/classfile", content: []byte{0xca, 0xfe, 0xba, 0xbe}},
+	})
+
+	summary, err := Inspect(path, "pkg-1.0.0-py3-none-any.whl")
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	if summary.SuspiciousFileTypeCount != 5 {
+		t.Fatalf("suspicious file types = %+v, want 5", summary.SuspiciousFileTypeExamples)
+	}
+	for _, want := range []string{"pe_binary:pe", "elf_binary:elf", "macho_binary:macho", "webassembly_binary:wasm", "java_class:classfile"} {
+		if !containsSuspiciousFileType(summary.SuspiciousFileTypeExamples, want) {
+			t.Fatalf("suspicious file types = %+v, want %q", summary.SuspiciousFileTypeExamples, want)
+		}
+	}
+}
+
+func TestInspectCountsOneSuspiciousFileTypePerFileAndPrefersMagic(t *testing.T) {
+	path := writeTarGzip(t, []tarEntry{
+		{name: "package/build/addon.node", content: []byte{0x7f, 'E', 'L', 'F', 0}},
+	})
+
+	summary, err := Inspect(path, "pkg-1.0.0.tgz")
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	if summary.SuspiciousFileTypeCount != 1 || len(summary.SuspiciousFileTypeExamples) != 1 {
+		t.Fatalf("suspicious file types = %+v, want one", summary.SuspiciousFileTypeExamples)
+	}
+	example := summary.SuspiciousFileTypeExamples[0]
+	if example.Type != "elf_binary" || example.Reason != "magic" {
+		t.Fatalf("example = %+v, want magic ELF classification", example)
+	}
+}
+
 func TestInspectSkipsOversizedMetadataFiles(t *testing.T) {
 	content := append([]byte(`{"scripts":{"postinstall":"node setup.js"},"padding":"`), bytes.Repeat([]byte("x"), int(maxMetadataFileBytes))...)
 	content = append(content, []byte(`"}`)...)
@@ -283,6 +345,16 @@ func containsSurface(values []report.ArtifactExecutionSurface, want string) bool
 	parts := strings.SplitN(want, ":", 2)
 	for _, value := range values {
 		if value.Type == parts[0] && strings.Contains(value.Name, parts[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSuspiciousFileType(values []report.ArtifactSuspiciousFileType, want string) bool {
+	parts := strings.SplitN(want, ":", 2)
+	for _, value := range values {
+		if value.Type == parts[0] && strings.Contains(value.Path, parts[1]) {
 			return true
 		}
 	}

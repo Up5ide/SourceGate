@@ -55,6 +55,7 @@ type PolicyTierConfig struct {
 	ArtifactMaxUncompressedSizeMB   int                 `json:"artifact_max_uncompressed_size_mb"`
 	ArtifactMaxExpansionRatio       int                 `json:"artifact_max_expansion_ratio"`
 	ArtifactExecutionSurfaces       bool                `json:"artifact_execution_surfaces"`
+	ArtifactSuspiciousFileTypes     bool                `json:"artifact_suspicious_file_types"`
 	ProtectedPackages               map[string][]string `json:"protected_packages"`
 	ProtectedTokens                 map[string][]string `json:"protected_tokens"`
 }
@@ -121,6 +122,8 @@ func (policy *PolicyTierConfig) UnmarshalJSON(data []byte) error {
 			policy.ArtifactMaxExpansionRatio, err = intOrFalse(field, raw)
 		case "artifact_execution_surfaces":
 			policy.ArtifactExecutionSurfaces, err = boolValue(field, raw)
+		case "artifact_suspicious_file_types":
+			policy.ArtifactSuspiciousFileTypes, err = boolValue(field, raw)
 		case "protected_packages":
 			policy.ProtectedPackages, err = ecosystemListMapOrFalse(field, raw)
 		case "protected_tokens":

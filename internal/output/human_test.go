@@ -122,9 +122,13 @@ func TestRenderHumanIncludesArtifactDownloadSummary(t *testing.T) {
 			ExecutionSurfaceExamples: []report.ArtifactExecutionSurface{
 				{Type: "npm_lifecycle_script", Path: "package/package.json", Name: "postinstall", Detail: "node setup.js"},
 			},
+			SuspiciousFileTypeCount: 1,
+			SuspiciousFileTypeExamples: []report.ArtifactSuspiciousFileType{
+				{Type: "elf_binary", Path: "package/bin/tool", Reason: "magic", Detail: "ELF executable or shared object"},
+			},
 		},
 	})
-	for _, want := range []string{"Artifact Download:", "Status: DOWNLOADED_VERIFIED", "Filename: pkg.tgz", "Digest: sha512 verified=true", "Artifact Inspection:", "Archive Format: tar.gz", "Files: 1", "Unsafe Paths: 1", "Execution Surfaces: 1", "npm_lifecycle_script package/package.json postinstall node setup.js"} {
+	for _, want := range []string{"Artifact Download:", "Status: DOWNLOADED_VERIFIED", "Filename: pkg.tgz", "Digest: sha512 verified=true", "Artifact Inspection:", "Archive Format: tar.gz", "Files: 1", "Unsafe Paths: 1", "Execution Surfaces: 1", "npm_lifecycle_script package/package.json postinstall node setup.js", "Suspicious File Types: 1", "elf_binary package/bin/tool magic ELF executable or shared object"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, buf.String())
 		}

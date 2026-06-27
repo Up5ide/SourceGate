@@ -45,24 +45,33 @@ type ArtifactExecutionSurface struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+type ArtifactSuspiciousFileType struct {
+	Type   string `json:"type"`
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+	Detail string `json:"detail,omitempty"`
+}
+
 type ArtifactInspectionSummary struct {
-	Status                   string                     `json:"status"`
-	ArchiveFormat            string                     `json:"archive_format"`
-	FileCount                int                        `json:"file_count"`
-	DirectoryCount           int                        `json:"directory_count"`
-	SymlinkCount             int                        `json:"symlink_count"`
-	HardlinkCount            int                        `json:"hardlink_count"`
-	TotalUncompressedBytes   int64                      `json:"total_uncompressed_bytes"`
-	CompressedBytes          int64                      `json:"compressed_bytes"`
-	ExpansionRatio           float64                    `json:"expansion_ratio"`
-	MaxPathDepth             int                        `json:"max_path_depth"`
-	DuplicatePathCount       int                        `json:"duplicate_path_count"`
-	NestedArchiveCount       int                        `json:"nested_archive_count"`
-	UnsafePathCount          int                        `json:"unsafe_path_count,omitempty"`
-	UnsafePathExamples       []string                   `json:"unsafe_path_examples,omitempty"`
-	ExecutionSurfaceCount    int                        `json:"execution_surface_count,omitempty"`
-	ExecutionSurfaceExamples []ArtifactExecutionSurface `json:"execution_surface_examples,omitempty"`
-	ExpansionRatioApplicable bool                       `json:"-"`
+	Status                     string                       `json:"status"`
+	ArchiveFormat              string                       `json:"archive_format"`
+	FileCount                  int                          `json:"file_count"`
+	DirectoryCount             int                          `json:"directory_count"`
+	SymlinkCount               int                          `json:"symlink_count"`
+	HardlinkCount              int                          `json:"hardlink_count"`
+	TotalUncompressedBytes     int64                        `json:"total_uncompressed_bytes"`
+	CompressedBytes            int64                        `json:"compressed_bytes"`
+	ExpansionRatio             float64                      `json:"expansion_ratio"`
+	MaxPathDepth               int                          `json:"max_path_depth"`
+	DuplicatePathCount         int                          `json:"duplicate_path_count"`
+	NestedArchiveCount         int                          `json:"nested_archive_count"`
+	UnsafePathCount            int                          `json:"unsafe_path_count,omitempty"`
+	UnsafePathExamples         []string                     `json:"unsafe_path_examples,omitempty"`
+	ExecutionSurfaceCount      int                          `json:"execution_surface_count,omitempty"`
+	ExecutionSurfaceExamples   []ArtifactExecutionSurface   `json:"execution_surface_examples,omitempty"`
+	SuspiciousFileTypeCount    int                          `json:"suspicious_file_type_count,omitempty"`
+	SuspiciousFileTypeExamples []ArtifactSuspiciousFileType `json:"suspicious_file_type_examples,omitempty"`
+	ExpansionRatioApplicable   bool                         `json:"-"`
 }
 
 type DebugTraceStatus string
