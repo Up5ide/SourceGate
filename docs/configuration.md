@@ -5,9 +5,13 @@ SourceGate supports two config modes:
 - Relaxed file config is the default build. It reads `sourcegate.config.json` from the current working directory, or a custom path passed with `--config <path>`.
 - Strict embedded config is built with `go build -tags embedded_config ./cmd/sourcegate`. It uses the config compiled into the binary and rejects `--config <path>`.
 
-In relaxed file-config mode, a missing default `sourcegate.config.json` is allowed and means all policy is disabled. A missing explicit `--config <path>` is an operational error. When a config file exists, it is a strict policy contract: it must contain `policy`, all three policy tiers, and every supported policy key in each tier. Disabled keys still remain present with a neutral value such as `false`, `0`, `{}`, or `[]`.
+In relaxed file-config mode, a missing default `sourcegate.config.json` is allowed and means all policy is disabled. A missing explicit `--config <path>` is an operational error.
 
-Use `sourcegate --print-config` to print JSON config status. In relaxed mode it reports the config path, whether it exists, whether it is valid, and the effective config when valid. In embedded mode it reports the embedded config and its SHA-256 hash. YAML output is not supported in this version.
+SourceGate 0.8.1 uses a grouped policy config. Old flat tier configs from 0.8.0 and earlier are rejected. A present file config, explicit config, or embedded config must be one complete JSON value containing `policy`, all three tiers, and every supported group key in each tier.
+
+Use `sourcegate --print-config` to print JSON config status. The printed effective config is the normalized policy that SourceGate evaluates, so it may show detailed check values rather than the exact grouped input.
+
+## Policy Tiers
 
 Configuration is organized under `policy` with three independent tiers:
 
@@ -17,16 +21,23 @@ Configuration is organized under `policy` with three independent tiers:
 
 SourceGate evaluates policy tiers from strongest to weakest for each check: `block`, then `alert`, then `inform`. If the same check matches multiple tiers, only the strongest matching tier is reported.
 
-When adding a new policy option, add it to all three tiers. A tier can disable any option with literal `false`, and the key must still be present in `inform`, `alert`, and `block`.
+Each tier has:
 
-For non-boolean options, `false` is normalized to that option's neutral value when SourceGate loads the config:
+- `groups`: required map of all supported groups to `true` or `false`.
+- `checks`: optional map of detailed check overrides.
 
-- integer options become `0`
-- map options become `{}`
-- string scope options become an empty disabled value
-- boolean options remain `false`
+Group values apply tier defaults. Explicit `checks` values always win over group defaults, including `false`.
 
-If an option is `false`, SourceGate does not run the rule controlled by that option.
+Supported groups:
+
+| Group | Purpose |
+| --- | --- |
+| `release_metadata` | Release age, dormant release, and first-release checks. |
+| `name_protection` | Protected package and protected token checks. |
+| `npm_lifecycle` | npm lifecycle script, suspicious command, history, and dormant-addition checks. |
+| `pypi_artifacts` | PyPI artifact history, shape, size, dependency, provenance, and file-count checks. |
+| `artifact_safety` | Artifact unsafe path, file-count, uncompressed-size, and expansion-ratio checks. |
+| `artifact_behavior` | Artifact execution-surface, suspicious file-type, and behavior-indicator checks. |
 
 ## Current Example
 
@@ -34,110 +45,96 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 {
   "policy": {
     "inform": {
-      "minimum_days_since_latest_release": 1,
-      "dormant_release_threshold_days": 90,
-      "alert_on_first_release": true,
-      "install_lifecycle_scripts": false,
-      "install_lifecycle_history_versions": false,
-      "suspicious_install_script_commands": false,
-      "install_script_added_after_dormancy": false,
-      "pypi_artifact_history_versions": false,
-      "pypi_artifact_shape_change": false,
-      "pypi_file_size_jump_percent": false,
-      "pypi_dependency_change": false,
-      "pypi_provenance_required": false,
-      "pypi_provenance_scope": false,
-      "pypi_include_optional_dependencies": false,
-      "pypi_release_file_count_change": false,
-      "artifact_unsafe_paths": false,
-      "artifact_max_file_count": false,
-      "artifact_max_uncompressed_size_mb": false,
-      "artifact_max_expansion_ratio": false,
-      "artifact_execution_surfaces": false,
-      "artifact_suspicious_file_types": false,
-      "artifact_behavior_indicators": false,
-      "protected_packages": false,
-      "protected_tokens": false
+      "groups": {
+        "release_metadata": true,
+        "name_protection": false,
+        "npm_lifecycle": false,
+        "pypi_artifacts": false,
+        "artifact_safety": false,
+        "artifact_behavior": false
+      },
+      "checks": {}
     },
     "alert": {
-      "minimum_days_since_latest_release": 3,
-      "dormant_release_threshold_days": 180,
-      "alert_on_first_release": true,
-      "install_lifecycle_scripts": true,
-      "install_lifecycle_history_versions": 5,
-      "suspicious_install_script_commands": false,
-      "install_script_added_after_dormancy": true,
-      "pypi_artifact_history_versions": 5,
-      "pypi_artifact_shape_change": true,
-      "pypi_file_size_jump_percent": 300,
-      "pypi_dependency_change": true,
-      "pypi_provenance_required": true,
-      "pypi_provenance_scope": "install-target",
-      "pypi_include_optional_dependencies": false,
-      "pypi_release_file_count_change": true,
-      "artifact_unsafe_paths": false,
-      "artifact_max_file_count": false,
-      "artifact_max_uncompressed_size_mb": false,
-      "artifact_max_expansion_ratio": false,
-      "artifact_execution_surfaces": true,
-      "artifact_suspicious_file_types": true,
-      "artifact_behavior_indicators": true,
-      "protected_packages": {
-        "npm": ["react", "lodash", "@tanstack/react-query"],
-        "pypi": ["requests", "django"]
+      "groups": {
+        "release_metadata": true,
+        "name_protection": true,
+        "npm_lifecycle": true,
+        "pypi_artifacts": true,
+        "artifact_safety": false,
+        "artifact_behavior": true
       },
-      "protected_tokens": false
+      "checks": {
+        "protected_packages": {
+          "npm": ["react", "lodash", "@tanstack/react-query"],
+          "pypi": ["requests", "django"]
+        }
+      }
     },
     "block": {
-      "minimum_days_since_latest_release": false,
-      "dormant_release_threshold_days": false,
-      "alert_on_first_release": false,
-      "install_lifecycle_scripts": false,
-      "install_lifecycle_history_versions": false,
-      "suspicious_install_script_commands": true,
-      "install_script_added_after_dormancy": false,
-      "pypi_artifact_history_versions": false,
-      "pypi_artifact_shape_change": false,
-      "pypi_file_size_jump_percent": false,
-      "pypi_dependency_change": false,
-      "pypi_provenance_required": false,
-      "pypi_provenance_scope": false,
-      "pypi_include_optional_dependencies": false,
-      "pypi_release_file_count_change": false,
-      "artifact_unsafe_paths": true,
-      "artifact_max_file_count": 20000,
-      "artifact_max_uncompressed_size_mb": 1024,
-      "artifact_max_expansion_ratio": 100,
-      "artifact_execution_surfaces": false,
-      "artifact_suspicious_file_types": false,
-      "artifact_behavior_indicators": false,
-      "protected_packages": false,
-      "protected_tokens": false
+      "groups": {
+        "release_metadata": false,
+        "name_protection": false,
+        "npm_lifecycle": true,
+        "pypi_artifacts": false,
+        "artifact_safety": true,
+        "artifact_behavior": false
+      },
+      "checks": {}
     }
-  },
-  "pypi_runtime": {
-    "target_platform": "linux_x86_64",
-    "python_version": "3.12",
-    "implementation": "cp",
-    "abis": ["cp312"]
   }
 }
 ```
 
-## Option Types
+The checked-in config keeps release metadata checks in `inform` and `alert`, blocks suspicious npm install commands, blocks hard archive safety failures, and alerts on PyPI artifact/provenance changes and artifact behavior signals.
 
-| Option | Accepted value type | Notes |
+## Check Overrides
+
+`checks` uses the same detailed check names that appear in debug traces and the normalized `--print-config` output. For non-boolean options, literal `false` disables the option:
+
+- integer options become `0`
+- map options become `{}`
+- string scope options become an empty disabled value
+- boolean options remain `false`
+
+Example: keep the alert-tier npm lifecycle group enabled, but disable only suspicious lifecycle commands in that tier:
+
+```json
+{
+  "policy": {
+    "alert": {
+      "groups": {
+        "release_metadata": false,
+        "name_protection": false,
+        "npm_lifecycle": true,
+        "pypi_artifacts": false,
+        "artifact_safety": false,
+        "artifact_behavior": false
+      },
+      "checks": {
+        "suspicious_install_script_commands": false
+      }
+    }
+  }
+}
+```
+
+The full config must still include `inform`, `alert`, and `block`; the snippet above shows only the relevant tier.
+
+Accepted check overrides:
+
+| Check | Accepted value type | Notes |
 | --- | --- | --- |
 | `minimum_days_since_latest_release` | integer or `false` | Number of days the selected release must age before the finding stops matching. |
 | `dormant_release_threshold_days` | integer or `false` | Number of inactive days that makes a selected release count as dormant. |
-| `alert_on_first_release` | boolean | `true` enables first-release findings; `false` disables them. |
+| `alert_on_first_release` | boolean | `true` enables first-release findings. |
 | `install_lifecycle_scripts` | boolean | `true` enables npm declared lifecycle script findings. |
-| `install_lifecycle_history_versions` | integer or `false` | Number of previous npm versions available for immediate-release comparison and reintroduction context; `false` disables history comparison. |
+| `install_lifecycle_history_versions` | integer or `false` | Number of previous npm versions available for immediate-release comparison and reintroduction context. |
 | `suspicious_install_script_commands` | boolean | `true` enables suspicious npm script command pattern findings. |
 | `install_script_added_after_dormancy` | boolean | `true` enables dormant-release npm lifecycle addition findings. |
-| `pypi_artifact_history_versions` | integer or `false` | Number of previous PyPI releases to compare; `false` disables history-dependent PyPI checks. |
+| `pypi_artifact_history_versions` | integer or `false` | Number of previous PyPI releases to compare. |
 | `pypi_artifact_shape_change` | boolean | `true` enables PyPI artifact shape change findings. |
-| `pypi_file_size_jump_percent` | integer or `false` | Percentage increase threshold for size jumps; `false` disables size-jump checks. |
+| `pypi_file_size_jump_percent` | integer or `false` | Percentage increase threshold for size jumps. |
 | `pypi_dependency_change` | boolean | `true` enables PyPI dependency change findings. |
 | `pypi_provenance_required` | boolean | `true` requires selected PyPI release file provenance to be available. |
 | `pypi_provenance_scope` | string or `false` | Required with `pypi_provenance_required`; accepts `install-target`, `all-artifacts`, or `sdist-only`. |
@@ -153,79 +150,27 @@ If an option is `false`, SourceGate does not run the rule controlled by that opt
 | `protected_packages` | map or `false` | Map keyed by ecosystem; `false` disables protected package checks for the tier. |
 | `protected_tokens` | map or `false` | Map keyed by ecosystem; `false` disables protected token checks for the tier. |
 
-## Release Timing
+## Check Behavior
 
-`minimum_days_since_latest_release` emits a finding when the selected registry release is newer than the configured number of days. This reduces exposure to fast-moving compromise windows where a malicious version may be published and installed before detection.
+`minimum_days_since_latest_release` emits a finding when the selected registry release is newer than the configured number of days.
 
-`dormant_release_threshold_days` emits a finding when the selected release follows a long period of package inactivity. For example, `180` means SourceGate reports when the previous release was at least 180 days before the selected release.
+`dormant_release_threshold_days` emits a finding when the selected release follows a long period of package inactivity.
 
 `alert_on_first_release` emits a finding when the package has only one published version.
 
-## npm Lifecycle Checks
+`install_lifecycle_scripts` emits npm-only findings when selected package metadata declares install-relevant lifecycle scripts such as `preinstall`, `install`, `postinstall`, `prepublish`, `prepare`, `preprepare`, or `postprepare`.
 
-These checks use npm registry metadata only and do not execute lifecycle scripts. The separate artifact mode may download and archive-inspect the selected npm tarball after metadata policy evaluation.
+`install_lifecycle_history_versions` controls how much previous npm metadata is available. Added and changed scripts are determined against the immediate previous eligible release. Older releases are used only to label a script as reintroduced instead of newly added.
 
-`install_lifecycle_scripts` emits npm-only findings when the selected package metadata declares install-relevant lifecycle scripts such as `preinstall`, `install`, `postinstall`, `prepublish`, `prepare`, `preprepare`, or `postprepare`.
+`suspicious_install_script_commands` emits npm-only findings when lifecycle script commands contain suspicious metadata-visible patterns such as direct URLs, network download commands, shell interpreters, native build tooling, package-manager invocation, or permission-changing commands.
 
-`install_lifecycle_history_versions` controls how much previous npm metadata is available. Added and changed scripts are determined against the immediate previous eligible release. Older releases are used only to label a script as reintroduced instead of newly added. If the immediate previous release exists but its scripts metadata is unavailable, the check is indeterminate.
+`install_script_added_after_dormancy` emits npm-only findings when the selected release adds or reintroduces a lifecycle script after the same tier's configured dormancy threshold.
 
-`suspicious_install_script_commands` emits npm-only findings when declared lifecycle script commands contain suspicious metadata-visible patterns such as direct URLs, network download commands, shell or command interpreters, native build tooling, package-manager invocation, or permission-changing commands.
+`pypi_artifact_shape_change`, `pypi_file_size_jump_percent`, `pypi_dependency_change`, `pypi_provenance_required`, and `pypi_release_file_count_change` inspect PyPI release-file metadata, version-specific metadata, dependencies, and Integrity API provenance where enabled.
 
-`install_script_added_after_dormancy` emits npm-only findings when the selected release adds or reintroduces a lifecycle script after the same tier's configured `dormant_release_threshold_days` period. The same tier must enable positive `install_lifecycle_history_versions` and `dormant_release_threshold_days` values.
+When `pypi_provenance_scope` is `install-target`, SourceGate runs local `<python> -m pip debug --verbose` to resolve Python compatibility tags. It does not install packages. If tag inspection fails, compatible-wheel provenance is marked indeterminate and source-distribution provenance remains checkable.
 
-## PyPI Artifact And Provenance Checks
-
-These checks use PyPI metadata, release-file metadata, version-specific metadata, and the PyPI Integrity API when provenance checks are enabled. The separate artifact mode may download and archive-inspect one selected install-target artifact after metadata policy evaluation.
-
-`pypi_artifact_history_versions` controls how many previous PyPI releases are available to history-dependent checks. Artifact size and file-count checks use the configured historical window. Dependency changes compare only the immediate previous eligible release.
-
-`pypi_artifact_shape_change` emits PyPI-only findings when the selected release changes artifact package types, removes wheels, becomes source-only, adds or removes sdists, or introduces new wheel platform tags.
-
-`pypi_file_size_jump_percent` emits PyPI-only findings when the selected release total size or largest file size increases by the configured percentage over the historical median. For example, `300` matches at four times the historical median.
-
-`pypi_dependency_change` emits PyPI-only findings when the selected release adds, removes, or changes the required/optional category of declared dependency names compared with the immediate previous eligible release. Required dependencies are compared by default. Set `pypi_include_optional_dependencies` to `true` in the same tier to include optional `extra` dependencies. A null or absent `requires_dist` value is treated as a known empty dependency list unless `Requires-Dist` is declared dynamic. If selected or immediate-previous dependency metadata is dynamic or otherwise unavailable, SourceGate marks the check indeterminate.
-
-`pypi_provenance_required` emits PyPI-only findings when the PyPI Integrity API reports missing provenance for scoped selected-release files or provenance availability cannot be confirmed. Configure the same tier's `pypi_provenance_scope` as:
-
-- `install-target`: compatible wheels plus source distributions.
-- `all-artifacts`: every selected-release artifact.
-- `sdist-only`: source distributions only.
-
-When `install-target` is enabled, SourceGate runs local `<python> -m pip debug --verbose` to resolve Python compatibility tags. It does not install packages. If tag inspection fails, SourceGate prints a non-policy warning, checks source distributions whose scope is still known, and marks compatible-wheel provenance evaluation indeterminate. It does not guess wheel compatibility from an explicit platform or the SourceGate host.
-
-`pypi_release_file_count_change` emits PyPI-only findings when the selected release file count differs from the historical median.
-
-## Artifact Archive Safety And Execution Checks
-
-These checks run only with `--mode artifact`, after the selected artifact is downloaded to a temporary file and its registry digest is verified. SourceGate reads archive metadata without extracting files, executing code, invoking package managers, or following links. `--inspect` remains a deprecated alias for `--mode artifact`.
-
-Supported archive formats are npm `.tgz` tarballs and PyPI `.whl`, `.zip`, `.tar.gz`, and `.tgz` artifacts. Unsupported verified artifact formats are operational errors in artifact mode because archive safety cannot be evaluated.
-
-`artifact_unsafe_paths` emits findings for path traversal, absolute paths, Windows drive or UNC paths, NUL bytes, duplicate normalized paths, and symlink or hardlink targets that escape the archive root. Symlinks and hardlinks are counted in inventory but are not findings by themselves when their targets stay inside the archive root.
-
-`artifact_max_file_count` emits findings when the inspected archive contains more regular files than the configured threshold.
-
-`artifact_max_uncompressed_size_mb` emits findings when the sum of uncompressed regular file sizes exceeds the configured MiB threshold.
-
-`artifact_max_expansion_ratio` emits findings when the uncompressed-to-compressed size ratio exceeds the configured threshold. Ratio evaluation only applies when compressed size is known and total uncompressed size is at least 10 MiB.
-
-`artifact_execution_surfaces` emits findings when bounded artifact metadata exposes install/build execution surfaces. It detects npm install lifecycle scripts, npm `bin` entries, npm native build hints, PyPI build files, PyPI build backends, PyPI wheel entry points, `.pth` startup files, wheel `.data/scripts/*`, and common shell/build files. Metadata reads are capped at 256 KiB per file and 1 MiB total per artifact.
-
-`artifact_suspicious_file_types` emits findings when archive entries look like native/executable content by extension or bounded magic-byte inspection. It detects Windows PE files, ELF, Mach-O, WebAssembly modules, Java class bytecode, native extension files such as `.node` and `.pyd`, shared libraries, object/static libraries, and installer/package formats such as `.msi`, `.deb`, `.rpm`, `.apk`, `.dmg`, and `.pkg`. SourceGate reads only a small file prefix for magic signatures and reports at most one suspicious type per file, preferring magic-byte evidence over extension evidence.
-
-`artifact_behavior_indicators` emits findings when capped text/source files contain high-confidence suspicious behavior indicators. It detects download-and-execute shell patterns, PowerShell download/execute patterns, Node and Python process execution APIs, credential or environment variable access, cloud metadata endpoints, and decoded-string execution patterns. SourceGate scans only likely text/source/script/config files, skips binary-looking content and nested archives, caps each scanned file at 128 KiB, caps total behavior scanning at 2 MiB per artifact, reports at most one unique indicator per file/type/detail, and truncates displayed details.
-
-The checked-in defaults put hard archive safety limits in the `block` tier: unsafe paths are blocked, file count is limited to `20000`, uncompressed size to `1024` MiB, and expansion ratio to `100`. The checked-in default enables `artifact_execution_surfaces`, `artifact_suspicious_file_types`, and `artifact_behavior_indicators` in the `alert` tier because these signals can be legitimate but are important to review. Users can move the same options to `inform` or `block`, or disable them, based on their tolerance.
-
-## Name Protection
-
-`protected_packages` emits findings on one-edit lookalikes of configured package names. Exact matches do not create findings.
-
-`protected_tokens` emits findings when a package uses a protected token as a separated name part, such as `tanstack-query-utils`. It does not alert on embedded strings such as `mytanstackhelper`.
-
-Both maps are keyed by ecosystem. Supported keys are `npm` and `pypi`.
-
-The checked-in defaults disable `protected_tokens`. Token policies remain available for explicit opt-in. Trusted-package exemptions and npm scoped-name handling are deferred TODOs before enabling broader defaults.
+Artifact checks run only with `--mode artifact`, after the selected artifact is downloaded to a temporary file and its registry digest is verified. SourceGate reads archive metadata without extracting files, executing code, invoking package managers, or following links.
 
 ## PyPI Runtime Defaults
 
@@ -248,22 +193,13 @@ sourcegate --mode artifact --python python --target-platform linux_x86_64 --pyth
 
 ## Validation
 
-SourceGate accepts an absent default config file in relaxed mode as disabled policy. A present config, an explicit `--config <path>`, and an embedded config must be one complete JSON value and include `policy`, `inform`, `alert`, `block`, and every supported policy key in every tier. SourceGate rejects partial configs and unknown fields.
+SourceGate accepts an absent default config file in relaxed mode as disabled policy. A present config, an explicit `--config <path>`, and an embedded config must be one complete JSON value and include `policy`, `inform`, `alert`, `block`, and every supported group key in each tier. SourceGate rejects partial configs, unknown groups, unknown check overrides, old flat tier keys, and unknown top-level fields.
 
-Numeric threshold values accept non-negative integers or `false`; negative values are rejected:
-
-- `minimum_days_since_latest_release`
-- `dormant_release_threshold_days`
-- `install_lifecycle_history_versions`
-- `pypi_artifact_history_versions`
-- `pypi_file_size_jump_percent`
-- `artifact_max_file_count`
-- `artifact_max_uncompressed_size_mb`
-- `artifact_max_expansion_ratio`
+Numeric threshold values accept non-negative integers or `false`; negative values are rejected.
 
 `protected_packages` and `protected_tokens` only accept `npm` and `pypi` ecosystem keys, and entries cannot be empty strings.
 
-Each tier must set `pypi_provenance_scope` to `false` when `pypi_provenance_required` is `false`. When provenance is required, the tier must configure one supported scope.
+Each tier must set `pypi_provenance_scope` to `false` or omit the check when `pypi_provenance_required` resolves to `false`. When provenance is required, the tier must configure one supported scope.
 
 Companion settings are validated within the same tier:
 

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sourcegate/sourcegate/internal/checks"
 	"github.com/sourcegate/sourcegate/internal/cli"
 	"github.com/sourcegate/sourcegate/internal/config"
 	"github.com/sourcegate/sourcegate/internal/configsource"
@@ -59,7 +60,7 @@ func TestRunInfoCommandsDoNotRequirePackageManagerOrRegistry(t *testing.T) {
 		want string
 	}{
 		"help":         {args: []string{"--help"}, want: "--mode metadata"},
-		"version":      {args: []string{"--version"}, want: "SourceGate version: 0.8.0"},
+		"version":      {args: []string{"--version"}, want: "SourceGate version: 0.8.1"},
 		"print config": {args: []string{"--print-config"}, want: `"config_mode"`},
 	}
 
@@ -86,12 +87,7 @@ func TestRunInfoCommandsDoNotRequirePackageManagerOrRegistry(t *testing.T) {
 
 func TestRunPrintConfigReportsRelaxedCustomConfig(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "strict.json")
-	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{
-		Block: config.PolicyTierConfig{SuspiciousInstallScriptCommands: true},
-	}})
-	if err != nil {
-		t.Fatalf("marshal config: %v", err)
-	}
+	configData := groupedConfigJSON(t, `{"policy":{"block":{"groups":{"npm_lifecycle":true}}}}`)
 	if err := os.WriteFile(configPath, configData, 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -260,17 +256,18 @@ func TestRunDebugDoesNotChangePyPIFetchBehavior(t *testing.T) {
 		t.Fatalf("Getwd returned error: %v", err)
 	}
 	tempDirectory := t.TempDir()
-	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{
-		Alert: config.PolicyTierConfig{
-			PyPIArtifactHistoryVersions: 1,
-			PyPIArtifactShapeChange:     true,
-			PyPIProvenanceRequired:      true,
-			PyPIProvenanceScope:         "install-target",
-		},
-	}})
-	if err != nil {
-		t.Fatalf("marshal config: %v", err)
-	}
+	configData := groupedConfigJSON(t, `{
+		"policy": {
+			"alert": {
+				"checks": {
+					"pypi_artifact_history_versions": 1,
+					"pypi_artifact_shape_change": true,
+					"pypi_provenance_required": true,
+					"pypi_provenance_scope": "install-target"
+				}
+			}
+		}
+	}`)
 	if err := os.WriteFile(filepath.Join(tempDirectory, config.DefaultPath), configData, 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -394,12 +391,7 @@ func TestRunInspectAppliesArchivePolicyFindings(t *testing.T) {
 	defer func() { npm.RegistryBaseURL = oldBase }()
 
 	workspace := t.TempDir()
-	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{
-		Block: config.PolicyTierConfig{ArtifactUnsafePaths: true},
-	}})
-	if err != nil {
-		t.Fatalf("marshal config: %v", err)
-	}
+	configData := groupedConfigJSON(t, `{"policy":{"block":{"checks":{"artifact_unsafe_paths":true}}}}`)
 	if err := os.WriteFile(filepath.Join(workspace, config.DefaultPath), configData, 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -448,12 +440,7 @@ func TestRunInspectAppliesExecutionSurfacePolicyFindings(t *testing.T) {
 	defer func() { npm.RegistryBaseURL = oldBase }()
 
 	workspace := t.TempDir()
-	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{
-		Alert: config.PolicyTierConfig{ArtifactExecutionSurfaces: true},
-	}})
-	if err != nil {
-		t.Fatalf("marshal config: %v", err)
-	}
+	configData := groupedConfigJSON(t, `{"policy":{"alert":{"checks":{"artifact_execution_surfaces":true}}}}`)
 	if err := os.WriteFile(filepath.Join(workspace, config.DefaultPath), configData, 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -512,12 +499,7 @@ func TestRunInspectAppliesBehaviorIndicatorPolicyFindings(t *testing.T) {
 	defer func() { npm.RegistryBaseURL = oldBase }()
 
 	workspace := t.TempDir()
-	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{
-		Alert: config.PolicyTierConfig{ArtifactBehaviorIndicators: true},
-	}})
-	if err != nil {
-		t.Fatalf("marshal config: %v", err)
-	}
+	configData := groupedConfigJSON(t, `{"policy":{"alert":{"checks":{"artifact_behavior_indicators":true}}}}`)
 	if err := os.WriteFile(filepath.Join(workspace, config.DefaultPath), configData, 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -655,12 +637,7 @@ func TestRunInspectSkipsArtifactDownloadWhenMetadataBlocks(t *testing.T) {
 	defer func() { npm.RegistryBaseURL = oldBase }()
 
 	workspace := t.TempDir()
-	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{
-		Block: config.PolicyTierConfig{MinimumDaysSinceLatestRelease: 365},
-	}})
-	if err != nil {
-		t.Fatalf("marshal config: %v", err)
-	}
+	configData := groupedConfigJSON(t, `{"policy":{"block":{"checks":{"minimum_days_since_latest_release":365}}}}`)
 	if err := os.WriteFile(filepath.Join(workspace, config.DefaultPath), configData, 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -724,6 +701,53 @@ func reportWithSeverities(severities ...string) report.PackageReport {
 	return report.PackageReport{Findings: findings}
 }
 
+func groupedConfigJSON(t *testing.T, override string) []byte {
+	t.Helper()
+	baseValue := map[string]any{
+		"policy": map[string]any{
+			"inform": groupedConfigTier(),
+			"alert":  groupedConfigTier(),
+			"block":  groupedConfigTier(),
+		},
+	}
+	var overrideValue map[string]any
+	if err := json.Unmarshal([]byte(override), &overrideValue); err != nil {
+		t.Fatalf("decode override config: %v", err)
+	}
+	mergeJSONMaps(baseValue, overrideValue)
+	result, err := json.Marshal(baseValue)
+	if err != nil {
+		t.Fatalf("marshal grouped config: %v", err)
+	}
+	return result
+}
+
+func groupedConfigTier() map[string]any {
+	return map[string]any{
+		"groups": map[string]any{
+			"release_metadata":  false,
+			"name_protection":   false,
+			"npm_lifecycle":     false,
+			"pypi_artifacts":    false,
+			"artifact_safety":   false,
+			"artifact_behavior": false,
+		},
+		"checks": map[string]any{},
+	}
+}
+
+func mergeJSONMaps(target, override map[string]any) {
+	for key, value := range override {
+		overrideMap, overrideOK := value.(map[string]any)
+		targetMap, targetOK := target[key].(map[string]any)
+		if overrideOK && targetOK {
+			mergeJSONMaps(targetMap, overrideMap)
+			continue
+		}
+		target[key] = value
+	}
+}
+
 func TestEffectivePyPITargetAppliesCLIOverrides(t *testing.T) {
 	target := effectivePyPITarget(config.PyPIRuntimeConfig{
 		TargetPlatform: "linux_x86_64",
@@ -745,7 +769,7 @@ func TestEffectivePyPITargetAppliesCLIOverrides(t *testing.T) {
 }
 
 func TestPyPIProvenanceScopesReturnsEnabledTierUnion(t *testing.T) {
-	scopes := pypiProvenanceScopes(config.PolicyConfig{
+	scopes := checks.RequiredPyPIProvenanceScopes(config.PolicyConfig{
 		Inform: config.PolicyTierConfig{PyPIProvenanceRequired: true, PyPIProvenanceScope: "install-target"},
 		Alert:  config.PolicyTierConfig{PyPIProvenanceRequired: true, PyPIProvenanceScope: "all-artifacts"},
 		Block:  config.PolicyTierConfig{PyPIProvenanceRequired: false},
@@ -757,12 +781,12 @@ func TestPyPIProvenanceScopesReturnsEnabledTierUnion(t *testing.T) {
 }
 
 func TestPyPIDependencyHistoryEnabledOnlyWhenDependencyCheckConfigured(t *testing.T) {
-	if pypiDependencyHistoryEnabled(config.PolicyConfig{
+	if checks.RequiresPyPIDependencyHistory(config.PolicyConfig{
 		Alert: config.PolicyTierConfig{PyPIArtifactShapeChange: true},
 	}) {
 		t.Fatalf("dependency history enabled for artifact-only policy")
 	}
-	if !pypiDependencyHistoryEnabled(config.PolicyConfig{
+	if !checks.RequiresPyPIDependencyHistory(config.PolicyConfig{
 		Block: config.PolicyTierConfig{PyPIDependencyChange: true},
 	}) {
 		t.Fatalf("dependency history disabled for dependency policy")

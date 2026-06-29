@@ -100,16 +100,17 @@ No baseline hypothesis changed because of registry drift during this snapshot.
 ## Temporary Policy Experiments
 
 Each policy experiment ran from a temporary workspace-local directory containing
-a full copy of `sourcegate.config.json`. Every policy key remained present in
-the `inform`, `alert`, and `block` tiers. The checked-in config was not changed.
+a full grouped copy of `sourcegate.config.json`. Overrides were made under the
+relevant tier's `checks` map while every tier kept the complete `groups` map.
+The checked-in config was not changed.
 
 | Experiment | Package | Temporary config delta | Expected trace | Observed trace | Result |
 | --- | --- | --- | --- | --- | --- |
-| Release age | `react` | Set alert-tier `minimum_days_since_latest_release` to `10000`. | `[release_age] MATCH severity=ALERT` | `[release_age] MATCH severity=ALERT` | PASS |
-| Protected package | `core-js` | Replace alert-tier npm `protected_packages` with `["corejs"]`. | `[protected_package] MATCH severity=ALERT` | `[protected_package] MATCH severity=ALERT` | PASS |
-| Protected token | `core-js` | Replace alert-tier npm `protected_tokens` with `["core"]`. | `[protected_token] MATCH severity=ALERT` | `[protected_token] MATCH severity=ALERT` | PASS |
-| npm lifecycle | `sharp` | Keep alert-tier `install_lifecycle_scripts` enabled and disable block-tier `suspicious_install_script_commands` to isolate the lifecycle alert. | `[npm_lifecycle_scripts] MATCH severity=ALERT` | `[npm_lifecycle_scripts] MATCH severity=ALERT` | PASS |
-| PyPI size jump | `django-filter` | Keep five history versions and set alert-tier `pypi_file_size_jump_percent` to `1`. | `[pypi_file_size_jump] MATCH severity=ALERT` | `[pypi_file_size_jump] MATCH severity=ALERT` | PASS |
+| Release age | `react` | Set `policy.alert.checks.minimum_days_since_latest_release` to `10000`. | `[release_age] MATCH severity=ALERT` | `[release_age] MATCH severity=ALERT` | PASS |
+| Protected package | `core-js` | Replace `policy.alert.checks.protected_packages.npm` with `["corejs"]`. | `[protected_package] MATCH severity=ALERT` | `[protected_package] MATCH severity=ALERT` | PASS |
+| Protected token | `core-js` | Replace `policy.alert.checks.protected_tokens.npm` with `["core"]`. | `[protected_token] MATCH severity=ALERT` | `[protected_token] MATCH severity=ALERT` | PASS |
+| npm lifecycle | `sharp` | Keep alert-tier `npm_lifecycle` enabled and set `policy.block.checks.suspicious_install_script_commands` to `false` to isolate the lifecycle alert. | `[npm_lifecycle_scripts] MATCH severity=ALERT` | `[npm_lifecycle_scripts] MATCH severity=ALERT` | PASS |
+| PyPI size jump | `django-filter` | Keep alert-tier `pypi_artifacts` enabled and set `policy.alert.checks.pypi_file_size_jump_percent` to `1`. | `[pypi_file_size_jump] MATCH severity=ALERT` | `[pypi_file_size_jump] MATCH severity=ALERT` | PASS |
 
 Representative policy-experiment evidence:
 

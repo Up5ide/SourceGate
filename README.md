@@ -4,9 +4,9 @@ SourceGate is a security-first Go CLI and pre-install security gate for package-
 
 The long-term goal is to become a local, policy-driven enforcement layer for software supply-chain risk. SourceGate should help developers and CI systems identify risky packages, explain the reasons clearly, and eventually allow, warn, or block installation based on deterministic policy.
 
-## Version 0.8.0 Scope
+## Version 0.8.1 Scope
 
-Version 0.8.0 adds first-class CLI information commands, explicit run modes, custom config selection for relaxed builds, and strict embedded-config builds.
+Version 0.8.1 adds grouped policy configuration and an internal policy registry while keeping the current metadata and artifact inspection behavior. This release intentionally rejects old flat policy config files from 0.8.0 and earlier.
 
 SourceGate does not install packages or invoke the real package manager yet. `--mode metadata` fetches public registry metadata only. `--mode artifact` additionally downloads one preferred install-target artifact into an OS temporary file, verifies its registry digest, inspects archive safety metadata, bounded install/build metadata, native/executable file type signals, and bounded suspicious behavior indicators without extraction, and deletes it before exit. `--mode install` is reserved for SourceGate 1.0 and currently returns a clear operational error.
 
@@ -71,7 +71,7 @@ Supported behavior:
 - Identify the target ecosystem.
 - Extract the requested package name and optional exact version.
 - Query the relevant public registry.
-- Read policy from either relaxed file config or strict embedded config. Relaxed builds read `sourcegate.config.json` by default and support `--config <path>`; embedded builds use the compiled-in config and reject external config paths.
+- Read grouped policy from either relaxed file config or strict embedded config. Relaxed builds read `sourcegate.config.json` by default and support `--config <path>`; embedded builds use the compiled-in config and reject external config paths.
 - Print CLI help, version/build/config-mode information, and JSON config status with `--help`, `--version`, and `--print-config`.
 - Emit tiered policy findings for release timing, package history, package names, npm lifecycle metadata, and PyPI artifact/provenance metadata.
 - Emit either human-readable output or structured JSON.

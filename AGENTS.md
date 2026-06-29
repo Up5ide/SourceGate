@@ -2,4 +2,4 @@
 
 - At the start of a new chat or materially new task, read `contex.md` first to understand the project structure, safety boundaries, and conventions. Treat it as orientation only; still inspect the relevant source files before making changes.
 
-- When adding any new SourceGate config option under `policy`, always add that option to all three policy tiers: `inform`, `alert`, and `block`. A tier may disable the option with an appropriate neutral value such as `false`, `0`, `{}`, or `[]`, but the key must still be present in every tier. Keep `sourcegate.config.json`, README examples, config structs, validation, and tests aligned with this rule.
+- SourceGate policy input is grouped. Each policy tier must include every supported group under `groups`; detailed settings belong under optional `checks` overrides. Group defaults set tier values, and explicit check overrides always win, including `false`. Keep `sourcegate.config.json`, the embedded config fixture, README examples, config structs, validation, registry definitions, and tests aligned with this rule.

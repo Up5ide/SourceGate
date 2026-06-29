@@ -1,9 +1,6 @@
 package checks
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -297,17 +294,14 @@ func TestEvaluateLeavesInspectOnlyWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestEvaluateLeavesInspectOnlyWhenFlexibleFalseValuesDisablePolicy(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sourcegate.config.json")
-	configData, err := json.Marshal(config.Config{Policy: config.PolicyConfig{}})
-	if err != nil {
-		t.Fatalf("marshal config: %v", err)
-	}
-	if err := os.WriteFile(path, configData, 0600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	config, err := config.Load(path)
+func TestEvaluateLeavesInspectOnlyWhenGroupedConfigDisablesPolicy(t *testing.T) {
+	cfg, err := config.LoadBytes([]byte(`{
+		"policy": {
+			"inform": {"groups": {"release_metadata": false, "name_protection": false, "npm_lifecycle": false, "pypi_artifacts": false, "artifact_safety": false, "artifact_behavior": false}},
+			"alert": {"groups": {"release_metadata": false, "name_protection": false, "npm_lifecycle": false, "pypi_artifacts": false, "artifact_safety": false, "artifact_behavior": false}},
+			"block": {"groups": {"release_metadata": false, "name_protection": false, "npm_lifecycle": false, "pypi_artifacts": false, "artifact_safety": false, "artifact_behavior": false}}
+		}
+	}`))
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
 	}
@@ -320,7 +314,7 @@ func TestEvaluateLeavesInspectOnlyWhenFlexibleFalseValuesDisablePolicy(t *testin
 		LifecycleScripts:    map[string]string{"postinstall": "node setup.js"},
 	}
 
-	Evaluate(&pkg, config, time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC))
+	Evaluate(&pkg, cfg, time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC))
 
 	if pkg.Decision != report.DecisionInspectOnly {
 		t.Fatalf("decision = %q, want %q", pkg.Decision, report.DecisionInspectOnly)

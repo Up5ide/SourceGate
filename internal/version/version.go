@@ -2,7 +2,7 @@ package version
 
 import "runtime/debug"
 
-const Current = "0.8.0"
+const Current = "0.8.1"
 
 type BuildMetadata struct {
 	Commit     string

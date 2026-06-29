@@ -15,7 +15,7 @@ PyPI install-target provenance inspection may run local `python -m pip debug --v
 2. `internal/cli` parses information commands such as `--help`, `--version`, and `--print-config`, plus install-shaped commands such as `sourcegate npm install <package>[@<version>]` and `sourcegate pip install <package>[==<version>]`.
 3. `internal/app` handles information commands before registry work, loads config through `internal/configsource`, selects the ecosystem adapter, fetches metadata, runs policy checks, renders output, and returns an exit code.
 4. `internal/ecosystem/npm` and `internal/ecosystem/pypi` fetch registry metadata and normalize it into `report.PackageReport`.
-5. `internal/checks` evaluates policy tiers and appends findings.
+5. `internal/checks` resolves registry-defined checks against policy tiers and appends findings.
 6. For `--mode artifact`, `internal/artifact` downloads and verifies the selected artifact unless metadata policy blocks it.
 7. `internal/archiveinspect` reads the verified archive inventory, hard archive safety metadata, bounded install/build execution-surface metadata, small file prefixes for native/executable signatures, and capped text/source files for suspicious behavior indicators without extracting files.
 8. `internal/output` renders human-readable or JSON results.
@@ -32,7 +32,7 @@ PyPI install-target provenance inspection may run local `python -m pip debug --v
 - `internal/ecosystem/`: ecosystem adapter interface and shared package spec.
 - `internal/ecosystem/npm/`: npm registry metadata adapter.
 - `internal/ecosystem/pypi/`: PyPI metadata, Integrity API, provenance targeting, and release history adapter.
-- `internal/checks/`: policy tier runner.
+- `internal/checks/`: policy registry, adapter requirement helpers, and tier runner.
 - `internal/checks/*/`: individual risk checks.
 - `internal/report/`: shared report and finding data model.
 - `internal/output/`: human and JSON output rendering.
@@ -52,11 +52,11 @@ Checks evaluate tiers from strongest to weakest: `block`, then `alert`, then `in
 For one check, only the strongest matching tier should produce a finding.
 `BLOCK` findings set the report decision to `BLOCK` and return exit code `30`, but SourceGate still does not perform or stop a real install process.
 
-When adding any new SourceGate config option under `policy`, always add that option to all three tiers: `inform`, `alert`, and `block`.
-A tier may disable the option with a neutral value such as `false`, `0`, `{}`, or `[]`, but the key must still be present in every tier.
-Keep `sourcegate.config.json`, README examples, config structs, validation, docs, and tests aligned.
+Policy input is grouped. Each tier contains a required `groups` map with every supported group and an optional `checks` map for detailed overrides. Group defaults set tier policy values, and explicit check overrides always win, including `false`.
+Old flat tier keys from SourceGate 0.8.0 and earlier are rejected.
+When adding a policy group or check override, keep the grouped config parser, normalized config structs, policy registry, default config, embedded config fixture, docs, and tests aligned.
 
-Default builds use relaxed file config: a missing default config file is allowed and produces disabled policy, while an explicit missing `--config <path>` is an operational error. Builds created with `go build -tags embedded_config ./cmd/sourcegate` use strict embedded config, reject external config paths, and report the embedded config hash through `--print-config`. A present file config or embedded config must be one complete JSON value containing `policy`, all three tiers, and every supported policy key. Companion options are validated within the same tier.
+Default builds use relaxed file config: a missing default config file is allowed and produces disabled policy, while an explicit missing `--config <path>` is an operational error. Builds created with `go build -tags embedded_config ./cmd/sourcegate` use strict embedded config, reject external config paths, and report the embedded config hash through `--print-config`. A present file config or embedded config must be one complete JSON value containing `policy`, all three tiers, and every supported group key in each tier. Companion options are validated on the normalized per-tier policy.
 
 ## Current Checks
 
@@ -118,7 +118,7 @@ Tests live beside the package they cover as `*_test.go`.
 Prefer extending existing packages and patterns over adding new abstractions.
 Checks should read from `report.PackageReport` and return findings; they should not perform registry requests or package-manager actions.
 Registry adapters should normalize external metadata into `PackageReport`.
-Config changes usually require updates in config structs, validation, checked-in config, docs, README examples, and tests.
+Config changes usually require updates in config structs, raw grouped parsing, validation, registry definitions, checked-in config, embedded config fixture, docs, README examples, and tests.
 
 ## Known Boundaries And Future Work
 

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"reflect"
 	"sort"
 	"strings"
 
@@ -15,6 +14,24 @@ import (
 )
 
 const DefaultPath = "sourcegate.config.json"
+
+const (
+	GroupReleaseMetadata  = "release_metadata"
+	GroupNameProtection   = "name_protection"
+	GroupNPMLifecycle     = "npm_lifecycle"
+	GroupPyPIArtifacts    = "pypi_artifacts"
+	GroupArtifactSafety   = "artifact_safety"
+	GroupArtifactBehavior = "artifact_behavior"
+)
+
+var supportedPolicyGroups = []string{
+	GroupReleaseMetadata,
+	GroupNameProtection,
+	GroupNPMLifecycle,
+	GroupPyPIArtifacts,
+	GroupArtifactSafety,
+	GroupArtifactBehavior,
+}
 
 type Config struct {
 	Policy      PolicyConfig      `json:"policy"`
@@ -61,84 +78,272 @@ type PolicyTierConfig struct {
 	ProtectedTokens                 map[string][]string `json:"protected_tokens"`
 }
 
-var policyTierFields = requiredJSONFields(reflect.TypeOf(PolicyTierConfig{}))
-
-func requiredJSONFields(valueType reflect.Type) []string {
-	fields := make([]string, 0, valueType.NumField())
-	for index := 0; index < valueType.NumField(); index++ {
-		name := strings.Split(valueType.Field(index).Tag.Get("json"), ",")[0]
-		if name != "" && name != "-" {
-			fields = append(fields, name)
-		}
-	}
-	return fields
+type rawConfig struct {
+	Policy      rawPolicyConfig   `json:"policy"`
+	PyPIRuntime PyPIRuntimeConfig `json:"pypi_runtime,omitempty"`
 }
 
-func (policy *PolicyTierConfig) UnmarshalJSON(data []byte) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return fmt.Errorf("policy tier must be an object: %w", err)
+type rawPolicyConfig struct {
+	Inform rawPolicyTierConfig `json:"inform"`
+	Alert  rawPolicyTierConfig `json:"alert"`
+	Block  rawPolicyTierConfig `json:"block"`
+}
+
+type rawPolicyTierConfig struct {
+	Groups map[string]bool            `json:"groups"`
+	Checks map[string]json.RawMessage `json:"checks,omitempty"`
+}
+
+func Load(path string) (Config, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return Config{}, nil
+	}
+	if err != nil {
+		return Config{}, fmt.Errorf("read config %s: %w", path, err)
+	}
+	config, err := LoadBytes(data)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	return config, nil
+}
+
+func LoadRequired(path string) (Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("read config %s: %w", path, err)
+	}
+	config, err := LoadBytes(data)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	return config, nil
+}
+
+func LoadBytes(data []byte) (Config, error) {
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+
+	var raw rawConfig
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&raw); err != nil {
+		return Config{}, err
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return Config{}, err
 	}
 
-	for field, raw := range fields {
-		var err error
-		switch field {
-		case "minimum_days_since_latest_release":
-			policy.MinimumDaysSinceLatestRelease, err = intOrFalse(field, raw)
-		case "dormant_release_threshold_days":
-			policy.DormantReleaseThresholdDays, err = intOrFalse(field, raw)
-		case "alert_on_first_release":
-			policy.AlertOnFirstRelease, err = boolValue(field, raw)
-		case "install_lifecycle_scripts":
-			policy.InstallLifecycleScripts, err = boolValue(field, raw)
-		case "install_lifecycle_history_versions":
-			policy.InstallLifecycleHistoryVersions, err = intOrFalse(field, raw)
-		case "suspicious_install_script_commands":
-			policy.SuspiciousInstallScriptCommands, err = boolValue(field, raw)
-		case "install_script_added_after_dormancy":
-			policy.InstallScriptAddedAfterDormancy, err = boolValue(field, raw)
-		case "pypi_artifact_history_versions":
-			policy.PyPIArtifactHistoryVersions, err = intOrFalse(field, raw)
-		case "pypi_artifact_shape_change":
-			policy.PyPIArtifactShapeChange, err = boolValue(field, raw)
-		case "pypi_file_size_jump_percent":
-			policy.PyPIFileSizeJumpPercent, err = intOrFalse(field, raw)
-		case "pypi_dependency_change":
-			policy.PyPIDependencyChange, err = boolValue(field, raw)
-		case "pypi_provenance_required":
-			policy.PyPIProvenanceRequired, err = boolValue(field, raw)
-		case "pypi_provenance_scope":
-			policy.PyPIProvenanceScope, err = stringOrFalse(field, raw)
-		case "pypi_include_optional_dependencies":
-			policy.PyPIIncludeOptionalDependencies, err = boolValue(field, raw)
-		case "pypi_release_file_count_change":
-			policy.PyPIReleaseFileCountChange, err = boolValue(field, raw)
-		case "artifact_unsafe_paths":
-			policy.ArtifactUnsafePaths, err = boolValue(field, raw)
-		case "artifact_max_file_count":
-			policy.ArtifactMaxFileCount, err = intOrFalse(field, raw)
-		case "artifact_max_uncompressed_size_mb":
-			policy.ArtifactMaxUncompressedSizeMB, err = intOrFalse(field, raw)
-		case "artifact_max_expansion_ratio":
-			policy.ArtifactMaxExpansionRatio, err = intOrFalse(field, raw)
-		case "artifact_execution_surfaces":
-			policy.ArtifactExecutionSurfaces, err = boolValue(field, raw)
-		case "artifact_suspicious_file_types":
-			policy.ArtifactSuspiciousFileTypes, err = boolValue(field, raw)
-		case "artifact_behavior_indicators":
-			policy.ArtifactBehaviorIndicators, err = boolValue(field, raw)
-		case "protected_packages":
-			policy.ProtectedPackages, err = ecosystemListMapOrFalse(field, raw)
-		case "protected_tokens":
-			policy.ProtectedTokens, err = ecosystemListMapOrFalse(field, raw)
-		default:
-			return fmt.Errorf("unknown policy tier field %q", field)
-		}
-		if err != nil {
-			return err
+	config, err := normalizeRawConfig(raw)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := validatePyPIRuntime(config.PyPIRuntime); err != nil {
+		return Config{}, err
+	}
+	for _, tier := range []struct {
+		name   string
+		policy PolicyTierConfig
+	}{
+		{name: "inform", policy: config.Policy.Inform},
+		{name: "alert", policy: config.Policy.Alert},
+		{name: "block", policy: config.Policy.Block},
+	} {
+		if err := validatePolicyTier(tier.name, tier.policy); err != nil {
+			return Config{}, err
 		}
 	}
+
+	return config, nil
+}
+
+func normalizeRawConfig(raw rawConfig) (Config, error) {
+	inform, err := normalizeRawPolicyTier("inform", raw.Policy.Inform)
+	if err != nil {
+		return Config{}, err
+	}
+	alert, err := normalizeRawPolicyTier("alert", raw.Policy.Alert)
+	if err != nil {
+		return Config{}, err
+	}
+	block, err := normalizeRawPolicyTier("block", raw.Policy.Block)
+	if err != nil {
+		return Config{}, err
+	}
+	return Config{
+		Policy: PolicyConfig{
+			Inform: inform,
+			Alert:  alert,
+			Block:  block,
+		},
+		PyPIRuntime: raw.PyPIRuntime,
+	}, nil
+}
+
+func normalizeRawPolicyTier(tier string, raw rawPolicyTierConfig) (PolicyTierConfig, error) {
+	if err := validateGroupMap(tier, raw.Groups); err != nil {
+		return PolicyTierConfig{}, err
+	}
+
+	policy := PolicyTierConfig{}
+	for _, group := range supportedPolicyGroups {
+		if raw.Groups[group] {
+			applyGroupDefaults(tier, group, &policy)
+		}
+	}
+
+	for _, check := range sortedRawKeys(raw.Checks) {
+		if err := applyCheckOverride(tier, check, raw.Checks[check], &policy); err != nil {
+			return PolicyTierConfig{}, err
+		}
+	}
+	return policy, nil
+}
+
+func validateGroupMap(tier string, groups map[string]bool) error {
+	if groups == nil {
+		return fmt.Errorf("policy.%s.groups is required", tier)
+	}
+	var missing []string
+	for _, group := range supportedPolicyGroups {
+		if _, ok := groups[group]; !ok {
+			missing = append(missing, "policy."+tier+".groups."+group)
+		}
+	}
+	for group := range groups {
+		if !supportedGroup(group) {
+			return fmt.Errorf("policy.%s.groups contains unsupported group %q", tier, group)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("missing required field(s): %s", strings.Join(missing, ", "))
+	}
 	return nil
+}
+
+func supportedGroup(group string) bool {
+	for _, supported := range supportedPolicyGroups {
+		if group == supported {
+			return true
+		}
+	}
+	return false
+}
+
+func applyGroupDefaults(tier, group string, policy *PolicyTierConfig) {
+	switch group {
+	case GroupReleaseMetadata:
+		switch tier {
+		case "inform":
+			policy.MinimumDaysSinceLatestRelease = 1
+			policy.DormantReleaseThresholdDays = 90
+			policy.AlertOnFirstRelease = true
+		case "alert":
+			policy.MinimumDaysSinceLatestRelease = 3
+			policy.DormantReleaseThresholdDays = 180
+			policy.AlertOnFirstRelease = true
+		}
+	case GroupNPMLifecycle:
+		switch tier {
+		case "alert":
+			policy.InstallLifecycleScripts = true
+			policy.InstallLifecycleHistoryVersions = 5
+			policy.InstallScriptAddedAfterDormancy = true
+		case "block":
+			policy.SuspiciousInstallScriptCommands = true
+		}
+	case GroupPyPIArtifacts:
+		if tier == "alert" {
+			policy.PyPIArtifactHistoryVersions = 5
+			policy.PyPIArtifactShapeChange = true
+			policy.PyPIFileSizeJumpPercent = 300
+			policy.PyPIDependencyChange = true
+			policy.PyPIProvenanceRequired = true
+			policy.PyPIProvenanceScope = "install-target"
+			policy.PyPIReleaseFileCountChange = true
+		}
+	case GroupArtifactSafety:
+		if tier == "block" {
+			policy.ArtifactUnsafePaths = true
+			policy.ArtifactMaxFileCount = 20000
+			policy.ArtifactMaxUncompressedSizeMB = 1024
+			policy.ArtifactMaxExpansionRatio = 100
+		}
+	case GroupArtifactBehavior:
+		if tier == "alert" {
+			policy.ArtifactExecutionSurfaces = true
+			policy.ArtifactSuspiciousFileTypes = true
+			policy.ArtifactBehaviorIndicators = true
+		}
+	}
+}
+
+func sortedRawKeys(values map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func applyCheckOverride(tier, check string, raw json.RawMessage, policy *PolicyTierConfig) error {
+	var err error
+	field := "policy." + tier + ".checks." + check
+	switch check {
+	case "minimum_days_since_latest_release":
+		policy.MinimumDaysSinceLatestRelease, err = intOrFalse(field, raw)
+	case "dormant_release_threshold_days":
+		policy.DormantReleaseThresholdDays, err = intOrFalse(field, raw)
+	case "alert_on_first_release":
+		policy.AlertOnFirstRelease, err = boolValue(field, raw)
+	case "install_lifecycle_scripts":
+		policy.InstallLifecycleScripts, err = boolValue(field, raw)
+	case "install_lifecycle_history_versions":
+		policy.InstallLifecycleHistoryVersions, err = intOrFalse(field, raw)
+	case "suspicious_install_script_commands":
+		policy.SuspiciousInstallScriptCommands, err = boolValue(field, raw)
+	case "install_script_added_after_dormancy":
+		policy.InstallScriptAddedAfterDormancy, err = boolValue(field, raw)
+	case "pypi_artifact_history_versions":
+		policy.PyPIArtifactHistoryVersions, err = intOrFalse(field, raw)
+	case "pypi_artifact_shape_change":
+		policy.PyPIArtifactShapeChange, err = boolValue(field, raw)
+	case "pypi_file_size_jump_percent":
+		policy.PyPIFileSizeJumpPercent, err = intOrFalse(field, raw)
+	case "pypi_dependency_change":
+		policy.PyPIDependencyChange, err = boolValue(field, raw)
+	case "pypi_provenance_required":
+		policy.PyPIProvenanceRequired, err = boolValue(field, raw)
+	case "pypi_provenance_scope":
+		policy.PyPIProvenanceScope, err = stringOrFalse(field, raw)
+	case "pypi_include_optional_dependencies":
+		policy.PyPIIncludeOptionalDependencies, err = boolValue(field, raw)
+	case "pypi_release_file_count_change":
+		policy.PyPIReleaseFileCountChange, err = boolValue(field, raw)
+	case "artifact_unsafe_paths":
+		policy.ArtifactUnsafePaths, err = boolValue(field, raw)
+	case "artifact_max_file_count":
+		policy.ArtifactMaxFileCount, err = intOrFalse(field, raw)
+	case "artifact_max_uncompressed_size_mb":
+		policy.ArtifactMaxUncompressedSizeMB, err = intOrFalse(field, raw)
+	case "artifact_max_expansion_ratio":
+		policy.ArtifactMaxExpansionRatio, err = intOrFalse(field, raw)
+	case "artifact_execution_surfaces":
+		policy.ArtifactExecutionSurfaces, err = boolValue(field, raw)
+	case "artifact_suspicious_file_types":
+		policy.ArtifactSuspiciousFileTypes, err = boolValue(field, raw)
+	case "artifact_behavior_indicators":
+		policy.ArtifactBehaviorIndicators, err = boolValue(field, raw)
+	case "protected_packages":
+		policy.ProtectedPackages, err = ecosystemListMapOrFalse(field, raw)
+	case "protected_tokens":
+		policy.ProtectedTokens, err = ecosystemListMapOrFalse(field, raw)
+	default:
+		return fmt.Errorf("policy.%s.checks contains unsupported check %q", tier, check)
+	}
+	return err
 }
 
 func intOrFalse(field string, raw json.RawMessage) (int, error) {
@@ -190,107 +395,6 @@ func ecosystemListMapOrFalse(field string, raw json.RawMessage) (map[string][]st
 
 func isJSONFalse(raw json.RawMessage) bool {
 	return bytes.Equal(bytes.TrimSpace(raw), []byte("false"))
-}
-
-func Load(path string) (Config, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return Config{}, nil
-	}
-	if err != nil {
-		return Config{}, fmt.Errorf("read config %s: %w", path, err)
-	}
-	config, err := LoadBytes(data)
-	if err != nil {
-		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
-	}
-	return config, nil
-}
-
-func LoadRequired(path string) (Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Config{}, fmt.Errorf("read config %s: %w", path, err)
-	}
-	config, err := LoadBytes(data)
-	if err != nil {
-		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
-	}
-	return config, nil
-}
-
-func LoadBytes(data []byte) (Config, error) {
-	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
-
-	if err := validateConfigCompleteness(data); err != nil {
-		return Config{}, err
-	}
-
-	var config Config
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&config); err != nil {
-		return Config{}, err
-	}
-	if err := requireJSONEOF(decoder); err != nil {
-		return Config{}, err
-	}
-	if err := validatePyPIRuntime(config.PyPIRuntime); err != nil {
-		return Config{}, err
-	}
-	for _, tier := range []struct {
-		name   string
-		policy PolicyTierConfig
-	}{
-		{name: "inform", policy: config.Policy.Inform},
-		{name: "alert", policy: config.Policy.Alert},
-		{name: "block", policy: config.Policy.Block},
-	} {
-		if err := validatePolicyTier(tier.name, tier.policy); err != nil {
-			return Config{}, err
-		}
-	}
-
-	return config, nil
-}
-
-func validateConfigCompleteness(data []byte) error {
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(data, &root); err != nil {
-		return err
-	}
-
-	var missing []string
-	policyRaw, ok := root["policy"]
-	if !ok {
-		return fmt.Errorf("missing required field policy")
-	}
-
-	var policy map[string]json.RawMessage
-	if err := json.Unmarshal(policyRaw, &policy); err != nil {
-		return fmt.Errorf("policy must be an object: %w", err)
-	}
-	for _, tierName := range []string{"inform", "alert", "block"} {
-		tierRaw, ok := policy[tierName]
-		if !ok {
-			missing = append(missing, "policy."+tierName)
-			continue
-		}
-		var tier map[string]json.RawMessage
-		if err := json.Unmarshal(tierRaw, &tier); err != nil {
-			return fmt.Errorf("policy.%s must be an object: %w", tierName, err)
-		}
-		for _, field := range policyTierFields {
-			if _, ok := tier[field]; !ok {
-				missing = append(missing, "policy."+tierName+"."+field)
-			}
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	sort.Strings(missing)
-	return fmt.Errorf("missing required field(s): %s", strings.Join(missing, ", "))
 }
 
 func requireJSONEOF(decoder *json.Decoder) error {

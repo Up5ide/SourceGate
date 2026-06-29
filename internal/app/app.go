@@ -163,63 +163,20 @@ func (a *App) adapterFor(req cli.InstallRequest, cfg config.Config) (ecosystem.A
 	switch req.Ecosystem {
 	case ecosystem.NPM:
 		return npm.NewWithOptions(a.client, npm.Options{
-			HistoryVersions: maxNPMHistoryVersions(cfg.Policy),
+			HistoryVersions: checks.RequiredNPMHistoryVersions(cfg.Policy),
 			SelectArtifact:  req.Mode == cli.ModeArtifact,
 		}), nil
 	case ecosystem.PyPI:
 		return pypi.NewWithOptions(a.client, pypi.Options{
-			HistoryVersions:   maxPyPIArtifactHistoryVersions(cfg.Policy),
-			FetchDependencies: pypiDependencyHistoryEnabled(cfg.Policy),
+			HistoryVersions:   checks.RequiredPyPIArtifactHistoryVersions(cfg.Policy),
+			FetchDependencies: checks.RequiresPyPIDependencyHistory(cfg.Policy),
 			SelectArtifact:    req.Mode == cli.ModeArtifact,
-			ProvenanceScopes:  pypiProvenanceScopes(cfg.Policy),
+			ProvenanceScopes:  checks.RequiredPyPIProvenanceScopes(cfg.Policy),
 			Target:            effectivePyPITarget(cfg.PyPIRuntime, req.PyPIRuntime),
 		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported ecosystem: %s", req.Ecosystem)
 	}
-}
-
-func pypiDependencyHistoryEnabled(policy config.PolicyConfig) bool {
-	for _, tier := range []config.PolicyTierConfig{policy.Inform, policy.Alert, policy.Block} {
-		if tier.PyPIDependencyChange {
-			return true
-		}
-	}
-	return false
-}
-
-func maxNPMHistoryVersions(policy config.PolicyConfig) int {
-	max := 0
-	for _, tier := range []config.PolicyTierConfig{policy.Inform, policy.Alert, policy.Block} {
-		if tier.InstallLifecycleHistoryVersions > max {
-			max = tier.InstallLifecycleHistoryVersions
-		}
-	}
-	return max
-}
-
-func maxPyPIArtifactHistoryVersions(policy config.PolicyConfig) int {
-	max := 0
-	for _, tier := range []config.PolicyTierConfig{policy.Inform, policy.Alert, policy.Block} {
-		if tier.PyPIArtifactHistoryVersions > max {
-			max = tier.PyPIArtifactHistoryVersions
-		}
-	}
-	return max
-}
-
-func pypiProvenanceScopes(policy config.PolicyConfig) []string {
-	seen := make(map[string]struct{})
-	for _, tier := range []config.PolicyTierConfig{policy.Inform, policy.Alert, policy.Block} {
-		if tier.PyPIProvenanceRequired {
-			seen[tier.PyPIProvenanceScope] = struct{}{}
-		}
-	}
-	scopes := make([]string, 0, len(seen))
-	for scope := range seen {
-		scopes = append(scopes, scope)
-	}
-	return scopes
 }
 
 func effectivePyPITarget(runtime config.PyPIRuntimeConfig, overrides cli.PyPIRuntimeOptions) pypi.TargetOptions {

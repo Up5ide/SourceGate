@@ -33,7 +33,7 @@ internal/report/         Shared report, finding, and decision types
 internal/ecosystem/      Shared ecosystem constants and adapter interface
 internal/ecosystem/npm/  npm registry metadata client
 internal/ecosystem/pypi/ PyPI registry metadata and Integrity API client
-internal/checks/         Policy tier runner
+internal/checks/         Policy registry and tier runner
 internal/checks/*/       Individual risk checks
 internal/output/         Human-readable and JSON output rendering
 internal/text/           Small shared text helpers
@@ -92,7 +92,7 @@ Configuration is parsed and validated by `internal/config`, then selected by `in
 
 Default builds use relaxed file config: `sourcegate.config.json` from the current working directory unless `--config <path>` is provided. A missing default config file produces a zero policy, but a missing explicit config path is an operational error. Builds created with `go build -tags embedded_config ./cmd/sourcegate` use strict embedded config, reject `--config`, and report the embedded config hash through `--print-config`.
 
-A present file config or embedded config is validated as one complete JSON value and must contain every policy key in all three tiers. Companion options are validated within each tier so checks cannot silently depend on a setting configured only at another severity.
+A present file config or embedded config is validated as one complete JSON value and must contain `policy`, all three tiers, and every supported group key under each tier's `groups` map. Per-check overrides live under each tier's optional `checks` map. Old flat tier keys are rejected in SourceGate 0.8.1.
 
 The policy model has three tiers:
 
@@ -104,8 +104,9 @@ The policy model has three tiers:
 
 The `block` tier sets the report decision to `BLOCK` and exits with code `30`. SourceGate still does not run or block a real package-manager install.
 
-Config also influences adapter fetch behavior. For PyPI, `internal/app` inspects all tiers before constructing the adapter:
+Config also influences adapter fetch behavior. `internal/app` asks `internal/checks` for policy-derived adapter requirements before constructing adapters:
 
+- The maximum configured `install_lifecycle_history_versions` controls how many previous npm releases the npm adapter keeps for lifecycle history checks.
 - The maximum configured `pypi_artifact_history_versions` controls how many previous releases the PyPI adapter fetches.
 - Immediate-previous version-specific dependency metadata is fetched only when at least one tier enables `pypi_dependency_change`.
 - Enabled `pypi_provenance_required` tiers contribute their `pypi_provenance_scope` to a union used for PyPI Integrity API fetches. Each policy tier still evaluates only its own configured scope.
@@ -124,7 +125,7 @@ Current metadata checks are:
 
 `--mode artifact` also enables archive safety checks for unsafe archive paths, file-count limits, total uncompressed-size limits, high expansion ratios, install/build execution surfaces, suspicious native/executable file types, and suspicious behavior indicators. `--inspect` remains a deprecated alias for `--mode artifact`.
 
-Individual check packages determine whether a condition matches and provide the finding message. The tier runner assigns the final finding level: `INFORM`, `ALERT`, or `BLOCK`.
+Individual check packages determine whether a condition matches and provide the finding message. The policy registry binds each check ID to its group, phase, enable logic, debug evidence, summary text, and evaluator. The tier runner assigns the final finding level: `INFORM`, `ALERT`, or `BLOCK`.
 
 ## Artifact Download Inspection
 
