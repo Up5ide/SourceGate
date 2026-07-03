@@ -24,12 +24,13 @@ var BaseURL = "https://pypi.org/pypi"
 var IntegrityBaseURL = "https://pypi.org/integrity"
 
 type Options struct {
-	HistoryVersions   int
-	FetchDependencies bool
-	SelectArtifact    bool
-	ProvenanceScopes  []string
-	Target            TargetOptions
-	RunCommand        CommandRunner
+	HistoryVersions        int
+	FetchDependencies      bool
+	SelectArtifact         bool
+	SelectPreviousArtifact bool
+	ProvenanceScopes       []string
+	Target                 TargetOptions
+	RunCommand             CommandRunner
 }
 
 type TargetOptions struct {
@@ -200,6 +201,14 @@ func (a *Adapter) FetchMetadata(ctx context.Context, spec ecosystem.PackageSpec)
 			candidate.SelectionError = err.Error()
 		}
 		pkg.ArtifactCandidate = candidate
+		if a.options.SelectPreviousArtifact && len(historyEntries) > 0 {
+			previousFiles := releaseFiles(data.Releases[historyEntries[0].version])
+			previousCandidate, err := selectPreferredArtifact(ctx, previousFiles, a.options)
+			if err != nil {
+				previousCandidate.SelectionError = err.Error()
+			}
+			pkg.PreviousArtifactCandidate = previousCandidate
+		}
 	}
 	return pkg, nil
 }

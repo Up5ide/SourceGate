@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -29,6 +31,7 @@ const maxMagicBytes int64 = 8
 const maxExecutionSurfaceExamples = 12
 const maxSuspiciousFileTypeExamples = 12
 const maxBehaviorIndicatorExamples = 12
+const maxGeneralRiskSignalExamples = 12
 
 func Inspect(artifactPath, filename string) (report.ArtifactInspectionSummary, error) {
 	stat, err := os.Stat(artifactPath)
@@ -47,8 +50,10 @@ func Inspect(artifactPath, filename string) (report.ArtifactInspectionSummary, e
 			ArchiveFormat:   format,
 			CompressedBytes: stat.Size(),
 		},
-		seen:         make(map[string]struct{}),
-		behaviorSeen: make(map[string]struct{}),
+		seen:            make(map[string]struct{}),
+		filePathSeen:    make(map[string]struct{}),
+		behaviorSeen:    make(map[string]struct{}),
+		generalRiskSeen: make(map[string]struct{}),
 	}
 
 	switch format {
@@ -70,17 +75,20 @@ func Inspect(artifactPath, filename string) (report.ArtifactInspectionSummary, e
 	}
 	inspector.summary.UnsafePathCount = inspector.unsafeCount
 	inspector.summary.UnsafePathExamples = append([]string(nil), inspector.unsafeExamples...)
+	sort.Strings(inspector.summary.Paths)
 	return inspector.summary, nil
 }
 
 type archiveInspector struct {
 	summary           report.ArtifactInspectionSummary
 	seen              map[string]struct{}
+	filePathSeen      map[string]struct{}
 	unsafeCount       int
 	unsafeExamples    []string
 	metadataBytesRead int64
 	behaviorBytesRead int64
 	behaviorSeen      map[string]struct{}
+	generalRiskSeen   map[string]struct{}
 }
 
 func (inspector *archiveInspector) inspectTarGzip(artifactPath string) error {
@@ -139,11 +147,13 @@ func (inspector *archiveInspector) recordTarEntry(header *tar.Header, reader *ta
 		inspector.recordLinkTarget("hardlink", normalized, header.Name, header.Linkname, ok)
 	case tar.TypeReg, tar.TypeRegA:
 		inspector.summary.FileCount++
+		inspector.recordFilePath(normalized)
 		inspector.addUncompressedBytes(header.Size)
 		if isNestedArchive(normalized) {
 			inspector.summary.NestedArchiveCount++
 		}
 		inspector.inspectPathExecutionSurfaces(normalized)
+		inspector.inspectPathGeneralRiskSignals(normalized)
 		if inspector.shouldReadMetadata(normalized, header.Size) {
 			content, err := readTarMetadata(reader, header.Size)
 			if err != nil {
@@ -152,6 +162,7 @@ func (inspector *archiveInspector) recordTarEntry(header *tar.Header, reader *ta
 			inspector.metadataBytesRead += int64(len(content))
 			inspector.inspectSuspiciousFileType(normalized, content)
 			inspector.inspectMetadataExecutionSurfaces(normalized, content)
+			inspector.inspectMetadataGeneralRiskSignals(normalized, content)
 			if inspector.shouldReadBehavior(normalized, int64(len(content))) {
 				inspector.behaviorBytesRead += int64(len(content))
 				inspector.inspectBehaviorIndicators(normalized, content)
@@ -192,11 +203,13 @@ func (inspector *archiveInspector) recordZipEntry(file *zip.File) error {
 		inspector.recordLinkTarget("symlink", normalized, file.Name, target, ok)
 	default:
 		inspector.summary.FileCount++
+		inspector.recordFilePath(normalized)
 		inspector.addUncompressedBytesFromUint(file.UncompressedSize64)
 		if isNestedArchive(normalized) {
 			inspector.summary.NestedArchiveCount++
 		}
 		inspector.inspectPathExecutionSurfaces(normalized)
+		inspector.inspectPathGeneralRiskSignals(normalized)
 		if inspector.shouldReadMetadata(normalized, uintToInt64(file.UncompressedSize64)) {
 			content, err := readZipMetadata(file)
 			if err != nil {
@@ -205,6 +218,7 @@ func (inspector *archiveInspector) recordZipEntry(file *zip.File) error {
 			inspector.metadataBytesRead += int64(len(content))
 			inspector.inspectSuspiciousFileType(normalized, content)
 			inspector.inspectMetadataExecutionSurfaces(normalized, content)
+			inspector.inspectMetadataGeneralRiskSignals(normalized, content)
 			if inspector.shouldReadBehavior(normalized, int64(len(content))) {
 				inspector.behaviorBytesRead += int64(len(content))
 				inspector.inspectBehaviorIndicators(normalized, content)
@@ -253,6 +267,17 @@ func (inspector *archiveInspector) recordPath(name string) (string, bool) {
 		}
 	}
 	return normalized, len(reasons) == 0
+}
+
+func (inspector *archiveInspector) recordFilePath(normalized string) {
+	if normalized == "" {
+		return
+	}
+	if _, exists := inspector.filePathSeen[normalized]; exists {
+		return
+	}
+	inspector.filePathSeen[normalized] = struct{}{}
+	inspector.summary.Paths = append(inspector.summary.Paths, normalized)
 }
 
 func (inspector *archiveInspector) recordLinkTarget(kind, normalizedName, originalName, target string, pathOK bool) {
@@ -307,6 +332,21 @@ func (inspector *archiveInspector) addBehaviorIndicator(indicator report.Artifac
 	}
 }
 
+func (inspector *archiveInspector) addGeneralRiskSignal(signal report.ArtifactGeneralRiskSignal) {
+	signal.Path = displayPath(signal.Path)
+	signal.Reason = displayText(signal.Reason)
+	signal.Detail = displayText(signal.Detail)
+	key := strings.Join([]string{signal.Path, signal.Type, signal.Reason, signal.Detail}, "\x00")
+	if _, exists := inspector.generalRiskSeen[key]; exists {
+		return
+	}
+	inspector.generalRiskSeen[key] = struct{}{}
+	inspector.summary.GeneralRiskSignalCount++
+	if len(inspector.summary.GeneralRiskSignalExamples) < maxGeneralRiskSignalExamples {
+		inspector.summary.GeneralRiskSignalExamples = append(inspector.summary.GeneralRiskSignalExamples, signal)
+	}
+}
+
 func (inspector *archiveInspector) inspectPathExecutionSurfaces(normalized string) {
 	if normalized == "" {
 		return
@@ -329,6 +369,39 @@ func (inspector *archiveInspector) inspectPathExecutionSurfaces(normalized strin
 	}
 	if isScriptFile(lower) {
 		inspector.addExecutionSurface(report.ArtifactExecutionSurface{Type: "script_file", Path: normalized, Name: path.Base(normalized)})
+	}
+}
+
+func (inspector *archiveInspector) inspectPathGeneralRiskSignals(normalized string) {
+	if normalized == "" {
+		return
+	}
+	lower := strings.ToLower(normalized)
+	base := strings.ToLower(path.Base(normalized))
+	switch base {
+	case ".env", ".npmrc", ".pypirc":
+		inspector.addGeneralRiskSignal(report.ArtifactGeneralRiskSignal{
+			Type:   "sensitive_config_file",
+			Path:   normalized,
+			Reason: "sensitive configuration filename",
+			Detail: base,
+		})
+	}
+	if strings.HasPrefix(lower, ".github/workflows/") || strings.Contains(lower, "/.github/workflows/") {
+		inspector.addGeneralRiskSignal(report.ArtifactGeneralRiskSignal{
+			Type:   "ci_workflow_path",
+			Path:   normalized,
+			Reason: "CI workflow path included in archive",
+		})
+	}
+	if strings.Contains(lower, ".config/systemd/user/") || strings.Contains(lower, "/systemd/user/") ||
+		strings.Contains(lower, "/launchagents/") || strings.Contains(lower, "/launchdaemons/") ||
+		strings.Contains(lower, "start menu/programs/startup/") {
+		inspector.addGeneralRiskSignal(report.ArtifactGeneralRiskSignal{
+			Type:   "startup_or_service_path",
+			Path:   normalized,
+			Reason: "startup or service-like archive path",
+		})
 	}
 }
 
@@ -367,6 +440,35 @@ func (inspector *archiveInspector) inspectMetadataExecutionSurfaces(normalized s
 		inspector.inspectPyProject(normalized, content)
 	case "entry_points.txt":
 		inspector.inspectEntryPoints(normalized, content)
+	}
+}
+
+func (inspector *archiveInspector) inspectMetadataGeneralRiskSignals(normalized string, content []byte) {
+	base := strings.ToLower(path.Base(normalized))
+	if base != "package.json" && base != "pyproject.toml" {
+		return
+	}
+	for _, value := range metadataURLs(content) {
+		parsed, err := url.Parse(value)
+		if err != nil || parsed.Hostname() == "" {
+			continue
+		}
+		if parsed.Scheme == "http" {
+			inspector.addGeneralRiskSignal(report.ArtifactGeneralRiskSignal{
+				Type:   "manifest_insecure_url",
+				Path:   normalized,
+				Reason: "insecure HTTP URL in package manifest metadata",
+				Detail: value,
+			})
+		}
+		if net.ParseIP(parsed.Hostname()) != nil {
+			inspector.addGeneralRiskSignal(report.ArtifactGeneralRiskSignal{
+				Type:   "manifest_direct_ip_url",
+				Path:   normalized,
+				Reason: "direct IP URL in package manifest metadata",
+				Detail: value,
+			})
+		}
 	}
 }
 
@@ -795,6 +897,23 @@ var behaviorIndicatorRules = []behaviorIndicatorRule{
 		detail:  "decoded string execution",
 		pattern: regexp.MustCompile(`(?i)(eval\s*\(\s*atob\s*\(|eval\s*\(\s*buffer\.from\s*\(|exec\s*\(\s*buffer\.from\s*\(|eval\s*\(\s*base64\.b64decode\s*\(|exec\s*\(\s*base64\.b64decode\s*\()`),
 	},
+}
+
+var metadataURLPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
+
+func metadataURLs(content []byte) []string {
+	if len(content) == 0 || looksBinaryContent(content) {
+		return nil
+	}
+	matches := metadataURLPattern.FindAllString(string(content), -1)
+	result := make([]string, 0, len(matches))
+	for _, value := range matches {
+		value = strings.TrimRight(value, ".,);]")
+		if value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func suspiciousFileTypeByMagic(normalized string, prefix []byte) (report.ArtifactSuspiciousFileType, bool) {

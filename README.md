@@ -4,11 +4,11 @@ SourceGate is a security-first Go CLI and pre-install security gate for package-
 
 The long-term goal is to become a local, policy-driven enforcement layer for software supply-chain risk. SourceGate should help developers and CI systems identify risky packages, explain the reasons clearly, and eventually allow, warn, or block installation based on deterministic policy.
 
-## Version 0.8.1 Scope
+## Version 0.8.2 Scope
 
-Version 0.8.1 adds grouped policy configuration and an internal policy registry while keeping the current metadata and artifact inspection behavior. This release intentionally rejects old flat policy config files from 0.8.0 and earlier.
+Version 0.8.2 adds explicit `--format report` output for deterministic tool and AI-agent consumption while keeping SourceGate metadata-first. Current development also includes grouped policy configuration, npm dependency/source metadata checks, private package public-registry policy, artifact general risk signals, and artifact deltas. This release intentionally rejects old flat policy config files from 0.8.0 and earlier.
 
-SourceGate does not install packages or invoke the real package manager yet. `--mode metadata` fetches public registry metadata only. `--mode artifact` additionally downloads one preferred install-target artifact into an OS temporary file, verifies its registry digest, inspects archive safety metadata, bounded install/build metadata, native/executable file type signals, and bounded suspicious behavior indicators without extraction, and deletes it before exit. `--mode install` is reserved for SourceGate 1.0 and currently returns a clear operational error.
+SourceGate does not install packages or invoke the real package manager yet. `--mode metadata` fetches public registry metadata only. `--mode artifact` additionally downloads one preferred install-target artifact into an OS temporary file, verifies its registry digest, inspects archive safety metadata, bounded install/build metadata, native/executable file type signals, general path/manifest risk signals, bounded suspicious behavior indicators, and optional previous-artifact deltas without extraction, and deletes temporary artifacts before exit. `--mode install` is reserved for SourceGate 1.0 and currently returns a clear operational error.
 
 Supported command shape:
 
@@ -23,6 +23,8 @@ sourcegate [--config <path>] [--mode metadata|artifact|install] pip install <pac
 sourcegate [--config <path>] [--mode metadata|artifact|install] pip install <package>==<version>
 sourcegate --format json npm install <package>
 sourcegate --format json pip install <package>==<version>
+sourcegate --format report npm install <package>
+sourcegate --format report -v pip install <package>==<version>
 sourcegate --debug npm install <package>
 sourcegate --debug pip install <package>
 sourcegate --mode artifact npm install <package>
@@ -39,7 +41,7 @@ Expected behavior:
 5. Exit with a deterministic status code for CI.
 6. Exit without installing the package in the current release.
 
-Global prefix options can be passed before the package manager. The optional `--debug` flag appends a concise evaluation trace to standard output. `--mode artifact` downloads, verifies, archive-inspects, and detects install/build execution surfaces, suspicious native/executable file types, and suspicious behavior indicators in one preferred install-target artifact after metadata policy evaluation; a metadata `BLOCK` result skips the download. `--inspect` remains as a deprecated alias for `--mode artifact`. Use `--format json` for structured package reports. PyPI inspection also accepts `--python`, `--target-platform`, `--python-version`, `--implementation`, and repeatable `--abi` target overrides.
+Global prefix options can be passed before the package manager. The optional `--debug` flag appends a concise evaluation trace to standard output. `--mode artifact` downloads, verifies, archive-inspects, and detects install/build execution surfaces, suspicious native/executable file types, and suspicious behavior indicators in one preferred install-target artifact after metadata policy evaluation; a metadata `BLOCK` result skips the download. `--inspect` remains as a deprecated alias for `--mode artifact`. Use `--format json` for the full structured package report, or `--format report` for a compact deterministic decision report for tools and AI agents. `--format report -v` includes the effective configuration. PyPI inspection also accepts `--python`, `--target-platform`, `--python-version`, `--implementation`, and repeatable `--abi` target overrides.
 
 ## Mission
 
@@ -73,17 +75,18 @@ Supported behavior:
 - Query the relevant public registry.
 - Read grouped policy from either relaxed file config or strict embedded config. Relaxed builds read `sourcegate.config.json` by default and support `--config <path>`; embedded builds use the compiled-in config and reject external config paths.
 - Print CLI help, version/build/config-mode information, and JSON config status with `--help`, `--version`, and `--print-config`.
-- Emit tiered policy findings for release timing, package history, package names, npm lifecycle metadata, and PyPI artifact/provenance metadata.
-- Emit either human-readable output or structured JSON.
+- Emit tiered policy findings for release timing, package history, package names, npm lifecycle metadata, npm dependency/source/publisher metadata, private package public-registry matches, and PyPI artifact/provenance metadata.
+- Emit human-readable output, full structured JSON, or a compact deterministic report JSON.
 - Return CI-friendly exit codes: `0` clean, `10` inform, `20` alert, `30` block, and `2` operational error.
 - Append a human-readable policy evaluation trace when `--debug` is provided before the package manager.
 - Check PyPI provenance for install-target artifacts by default when the configured policy requires provenance.
 - Print a warning and mark install-target provenance indeterminate when Python compatibility-tag inspection fails, without guessing compatible wheels.
-- With `--mode artifact`, download one preferred install-target artifact to a temporary file, enforce a 100 MiB limit, verify its registry digest, inspect archive inventory, hard archive safety issues, bounded install/build execution-surface metadata, suspicious native/executable file type signals, and bounded suspicious behavior indicators, report the result, and delete the file.
+- With `--mode artifact`, download one preferred install-target artifact to a temporary file, enforce a 100 MiB limit, verify its registry digest, inspect archive inventory, hard archive safety issues, bounded install/build execution-surface metadata, suspicious native/executable file type signals, general path/manifest risk signals, bounded suspicious behavior indicators, and policy-enabled previous-artifact deltas, report the result, and delete temporary files.
+- Print `Mode: metadata|artifact` in human output and include evaluation mode in JSON and report output. If artifact policy is enabled but the command uses metadata mode, SourceGate prints a warning because artifact checks did not run.
 - Exit without installing the package.
 - Avoid invoking `npm`, package installation, or any package lifecycle hooks. PyPI install-target provenance inspection may run local `<python> -m pip debug --verbose` to discover compatibility tags.
 
-The current version does not extract package contents, scan source code broadly, or invoke package-manager install behavior. Archive inspection reads headers, bounded package metadata, small file prefixes for native/executable magic signatures, and capped text/source files for high-confidence suspicious behavior indicators only.
+The current version does not extract package contents, scan source code broadly, or invoke package-manager install behavior. Archive inspection reads headers, bounded package metadata, path inventory, small file prefixes for native/executable magic signatures, general path/manifest signals, and capped text/source files for high-confidence suspicious behavior indicators only.
 
 ## Documentation
 
@@ -96,13 +99,13 @@ The current version does not extract package contents, scan source code broadly,
 
 Near-term work:
 
-- Normalize npm and PyPI metadata into a shared package report format.
-- Add registry error handling for missing packages, private packages, rate limits, and network failures.
-- Add more metadata findings, such as unusual release timing and missing project information.
+- Refine npm source metadata checks without leaving registry-provided metadata by default.
+- Improve dependency-confusion policy ergonomics for organizations with private packages.
+- Add more report fixtures and smoke cases for artifact delta behavior.
 
 Later work:
 
-- Add typosquatting and dependency confusion checks.
+- Add broader typosquatting and dependency confusion checks.
 - Add upstream repository commit-time analysis where package metadata exposes a source repository.
 - Broaden suspicious file path, binary, obfuscation, credential, environment, network, and remote payload indicators as confidence improves.
 - Add local policy configuration for allow, warn, and block decisions.

@@ -5,15 +5,19 @@ import (
 	"time"
 
 	"github.com/sourcegate/sourcegate/internal/checks/artifactbehavior"
+	"github.com/sourcegate/sourcegate/internal/checks/artifactdelta"
 	"github.com/sourcegate/sourcegate/internal/checks/artifactexecution"
 	"github.com/sourcegate/sourcegate/internal/checks/artifactfiletypes"
+	"github.com/sourcegate/sourcegate/internal/checks/artifactgeneralrisk"
 	"github.com/sourcegate/sourcegate/internal/checks/artifactsafety"
 	"github.com/sourcegate/sourcegate/internal/checks/dormant"
 	"github.com/sourcegate/sourcegate/internal/checks/firstrelease"
 	"github.com/sourcegate/sourcegate/internal/checks/installlifecycle"
 	"github.com/sourcegate/sourcegate/internal/checks/namesquat"
+	"github.com/sourcegate/sourcegate/internal/checks/npmdependencies"
 	"github.com/sourcegate/sourcegate/internal/checks/pypiartifacts"
 	"github.com/sourcegate/sourcegate/internal/checks/releaseage"
+	"github.com/sourcegate/sourcegate/internal/checks/sourcemetadata"
 	"github.com/sourcegate/sourcegate/internal/config"
 	"github.com/sourcegate/sourcegate/internal/report"
 )
@@ -177,6 +181,30 @@ var policyDefinitions = []policyCheckDefinition{
 		},
 	},
 	{
+		id:         "private_package_public_registry",
+		group:      config.GroupNameProtection,
+		phase:      phaseMetadata,
+		applicable: alwaysApplicable,
+		enabled:    func(tiers []policyTier) bool { return anyTier(tiers, hasPrivatePackagePolicy) },
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			return protectedNameEvidence(pkg, "configured private/internal packages", tiers, func(policy config.PolicyTierConfig) map[string][]string {
+				return policy.PrivatePackages
+			})
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !hasPrivatePackagePolicy(policy) {
+				return nil
+			}
+			return namesquat.CheckPrivatePackages(pkg, policy)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !hasPrivatePackagePolicy(policy) {
+				return ""
+			}
+			return "private/internal package public-registry checks enabled"
+		},
+	},
+	{
 		id:         "first_release",
 		group:      config.GroupReleaseMetadata,
 		phase:      phaseMetadata,
@@ -325,6 +353,297 @@ var policyDefinitions = []policyCheckDefinition{
 				return ""
 			}
 			return "dormant npm install script addition checks enabled"
+		},
+	},
+	{
+		id:         "npm_dependency_history",
+		group:      config.GroupNPMDependencies,
+		phase:      phaseMetadata,
+		applicable: isNPM,
+		enabled: func(tiers []policyTier) bool {
+			return maxTierInteger(tiers, func(policy config.PolicyTierConfig) int { return policy.NPMDependencyHistoryVersions }) > 0
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			historyVersions := maxTierInteger(tiers, func(policy config.PolicyTierConfig) int { return policy.NPMDependencyHistoryVersions })
+			return append(npmdependencies.DependencyEvidence(pkg, historyVersions), integerThresholdEvidence("history limits", tiers, func(policy config.PolicyTierConfig) int {
+				return policy.NPMDependencyHistoryVersions
+			}))
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			return nil
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if policy.NPMDependencyHistoryVersions <= 0 {
+				return ""
+			}
+			return fmt.Sprintf("npm dependency history checks compare previous %d version(s)", policy.NPMDependencyHistoryVersions)
+		},
+	},
+	{
+		id:         "npm_dependency_change",
+		group:      config.GroupNPMDependencies,
+		phase:      phaseMetadata,
+		applicable: isNPM,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.NPMDependencyChange })
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			historyVersions := maxTierInteger(tiers, func(policy config.PolicyTierConfig) int { return policy.NPMDependencyHistoryVersions })
+			return append(npmdependencies.DependencyEvidence(pkg, historyVersions), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.NPMDependencyChange
+			}))
+		},
+		indeterminate: func(pkg report.PackageReport, policy config.PolicyTierConfig) string {
+			if !policy.NPMDependencyChange {
+				return ""
+			}
+			if pkg.NPMHistory.IndeterminateReason != "" {
+				return pkg.NPMHistory.IndeterminateReason
+			}
+			return npmdependencies.DependencyIndeterminateReason(pkg, policy.NPMDependencyHistoryVersions)
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.NPMDependencyChange {
+				return nil
+			}
+			return npmdependencies.CheckDependencyChange(pkg, policy.NPMDependencyHistoryVersions)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.NPMDependencyChange {
+				return ""
+			}
+			return "npm direct dependency name change checks enabled"
+		},
+	},
+	{
+		id:         "npm_direct_dependency_lifecycle_scripts",
+		group:      config.GroupNPMDependencies,
+		phase:      phaseMetadata,
+		applicable: isNPM,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.NPMDirectDependencyLifecycleScripts })
+		},
+		checkOnIndeterminate: true,
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			return append(npmdependencies.DirectDependencyEvidence(pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.NPMDirectDependencyLifecycleScripts
+			}))
+		},
+		indeterminate: func(pkg report.PackageReport, policy config.PolicyTierConfig) string {
+			if !policy.NPMDirectDependencyLifecycleScripts {
+				return ""
+			}
+			return npmdependencies.DirectDependencyIndeterminateReason(pkg)
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.NPMDirectDependencyLifecycleScripts {
+				return nil
+			}
+			return npmdependencies.CheckDirectDependencyLifecycleScripts(pkg)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.NPMDirectDependencyLifecycleScripts {
+				return ""
+			}
+			return "direct npm dependency lifecycle script checks enabled"
+		},
+	},
+	{
+		id:         "npm_direct_dependency_suspicious_install_commands",
+		group:      config.GroupNPMDependencies,
+		phase:      phaseMetadata,
+		applicable: isNPM,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.NPMDirectDependencySuspiciousInstallCommands })
+		},
+		checkOnIndeterminate: true,
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			return append(npmdependencies.DirectDependencyEvidence(pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.NPMDirectDependencySuspiciousInstallCommands
+			}))
+		},
+		indeterminate: func(pkg report.PackageReport, policy config.PolicyTierConfig) string {
+			if !policy.NPMDirectDependencySuspiciousInstallCommands {
+				return ""
+			}
+			return npmdependencies.DirectDependencyIndeterminateReason(pkg)
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.NPMDirectDependencySuspiciousInstallCommands {
+				return nil
+			}
+			return npmdependencies.CheckDirectDependencySuspiciousInstallCommands(pkg)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.NPMDirectDependencySuspiciousInstallCommands {
+				return ""
+			}
+			return "direct npm dependency suspicious install command checks enabled"
+		},
+	},
+	{
+		id:         "npm_git_head_missing",
+		group:      config.GroupSourceMetadata,
+		phase:      phaseMetadata,
+		applicable: isNPM,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.NPMGitHeadMissing })
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			return append(sourcemetadata.Evidence(pkg, 0), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.NPMGitHeadMissing
+			}))
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.NPMGitHeadMissing {
+				return nil
+			}
+			return sourcemetadata.CheckGitHeadMissing(pkg)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.NPMGitHeadMissing {
+				return ""
+			}
+			return "npm gitHead presence checks enabled"
+		},
+	},
+	{
+		id:         "npm_repository_missing",
+		group:      config.GroupSourceMetadata,
+		phase:      phaseMetadata,
+		applicable: isNPM,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.NPMRepositoryMissing })
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			return append(sourcemetadata.Evidence(pkg, 0), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.NPMRepositoryMissing
+			}))
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.NPMRepositoryMissing {
+				return nil
+			}
+			return sourcemetadata.CheckRepositoryMissing(pkg)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.NPMRepositoryMissing {
+				return ""
+			}
+			return "npm repository URL presence checks enabled"
+		},
+	},
+	{
+		id:         "npm_git_head_changed_after_dormancy",
+		group:      config.GroupSourceMetadata,
+		phase:      phaseMetadata,
+		applicable: isNPM,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.NPMGitHeadChangedAfterDormancy })
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			dormancyThreshold := maxTierInteger(tiers, func(policy config.PolicyTierConfig) int { return policy.DormantReleaseThresholdDays })
+			return append(sourcemetadata.Evidence(pkg, 0), integerThresholdEvidence("dormancy thresholds (day(s))", tiers, func(policy config.PolicyTierConfig) int {
+				return policy.DormantReleaseThresholdDays
+			}), fmt.Sprintf("max dormancy threshold: %d", dormancyThreshold))
+		},
+		indeterminate: func(pkg report.PackageReport, policy config.PolicyTierConfig) string {
+			if !policy.NPMGitHeadChangedAfterDormancy {
+				return ""
+			}
+			return pkg.NPMHistory.IndeterminateReason
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.NPMGitHeadChangedAfterDormancy {
+				return nil
+			}
+			return sourcemetadata.CheckGitHeadChangedAfterDormancy(pkg, policy.DormantReleaseThresholdDays)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.NPMGitHeadChangedAfterDormancy {
+				return ""
+			}
+			return "npm gitHead dormancy-change checks enabled"
+		},
+	},
+	{
+		id:         "npm_repository_changed",
+		group:      config.GroupSourceMetadata,
+		phase:      phaseMetadata,
+		applicable: isNPM,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.NPMRepositoryChanged })
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			return append(sourcemetadata.Evidence(pkg, 0), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.NPMRepositoryChanged
+			}))
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.NPMRepositoryChanged {
+				return nil
+			}
+			return sourcemetadata.CheckRepositoryChanged(pkg)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.NPMRepositoryChanged {
+				return ""
+			}
+			return "npm repository URL change checks enabled"
+		},
+	},
+	{
+		id:         "npm_publisher_changed",
+		group:      config.GroupSourceMetadata,
+		phase:      phaseMetadata,
+		applicable: isNPM,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.NPMPublisherChanged })
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			return append(sourcemetadata.Evidence(pkg, 0), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.NPMPublisherChanged
+			}))
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.NPMPublisherChanged {
+				return nil
+			}
+			return sourcemetadata.CheckPublisherChanged(pkg)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.NPMPublisherChanged {
+				return ""
+			}
+			return "npm publisher metadata change checks enabled"
+		},
+	},
+	{
+		id:         "npm_release_burst",
+		group:      config.GroupSourceMetadata,
+		phase:      phaseMetadata,
+		applicable: isNPM,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.NPMReleaseBurstCount > 0 && policy.NPMReleaseBurstWindowHours > 0
+			})
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			windowHours := maxTierInteger(tiers, func(policy config.PolicyTierConfig) int { return policy.NPMReleaseBurstWindowHours })
+			return append(sourcemetadata.Evidence(pkg, windowHours), integerThresholdEvidence("burst count thresholds", tiers, func(policy config.PolicyTierConfig) int {
+				return policy.NPMReleaseBurstCount
+			}), integerThresholdEvidence("burst window hour thresholds", tiers, func(policy config.PolicyTierConfig) int {
+				return policy.NPMReleaseBurstWindowHours
+			}))
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			return sourcemetadata.CheckReleaseBurst(pkg, policy.NPMReleaseBurstCount, policy.NPMReleaseBurstWindowHours)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if policy.NPMReleaseBurstCount <= 0 || policy.NPMReleaseBurstWindowHours <= 0 {
+				return ""
+			}
+			return fmt.Sprintf("npm release burst checks alert on %d release(s) within %d hour(s)", policy.NPMReleaseBurstCount, policy.NPMReleaseBurstWindowHours)
 		},
 	},
 	{
@@ -713,6 +1032,160 @@ var policyDefinitions = []policyCheckDefinition{
 				return ""
 			}
 			return "artifact behavior indicator checks enabled"
+		},
+	},
+	{
+		id:         "artifact_general_risk_signals",
+		group:      config.GroupArtifactBehavior,
+		phase:      phaseArtifact,
+		applicable: artifactInspectionAvailable,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.ArtifactGeneralRiskSignals })
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			return append(artifactgeneralrisk.Evidence(pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.ArtifactGeneralRiskSignals
+			}))
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.ArtifactGeneralRiskSignals {
+				return nil
+			}
+			return artifactgeneralrisk.CheckGeneralRiskSignals(pkg)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.ArtifactGeneralRiskSignals {
+				return ""
+			}
+			return "artifact general path and manifest risk signal checks enabled"
+		},
+	},
+	{
+		id:         "artifact_file_list_change",
+		group:      config.GroupArtifactBehavior,
+		phase:      phaseArtifact,
+		applicable: artifactInspectionAvailable,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.ArtifactFileListChange })
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			return append(artifactdelta.Evidence(pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.ArtifactFileListChange
+			}))
+		},
+		indeterminate: func(pkg report.PackageReport, policy config.PolicyTierConfig) string {
+			if !policy.ArtifactFileListChange {
+				return ""
+			}
+			return artifactdelta.DeltaIndeterminateReason(pkg)
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.ArtifactFileListChange {
+				return nil
+			}
+			return artifactdelta.CheckFileListChange(pkg)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.ArtifactFileListChange {
+				return ""
+			}
+			return "artifact file-list delta checks enabled"
+		},
+	},
+	{
+		id:         "artifact_new_execution_surfaces",
+		group:      config.GroupArtifactBehavior,
+		phase:      phaseArtifact,
+		applicable: artifactInspectionAvailable,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.ArtifactNewExecutionSurfaces })
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			return append(artifactdelta.Evidence(pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.ArtifactNewExecutionSurfaces
+			}))
+		},
+		indeterminate: func(pkg report.PackageReport, policy config.PolicyTierConfig) string {
+			if !policy.ArtifactNewExecutionSurfaces {
+				return ""
+			}
+			return artifactdelta.DeltaIndeterminateReason(pkg)
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.ArtifactNewExecutionSurfaces {
+				return nil
+			}
+			return artifactdelta.CheckNewExecutionSurfaces(pkg)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.ArtifactNewExecutionSurfaces {
+				return ""
+			}
+			return "artifact new execution surface delta checks enabled"
+		},
+	},
+	{
+		id:         "artifact_new_suspicious_file_types",
+		group:      config.GroupArtifactBehavior,
+		phase:      phaseArtifact,
+		applicable: artifactInspectionAvailable,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.ArtifactNewSuspiciousFileTypes })
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			return append(artifactdelta.Evidence(pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.ArtifactNewSuspiciousFileTypes
+			}))
+		},
+		indeterminate: func(pkg report.PackageReport, policy config.PolicyTierConfig) string {
+			if !policy.ArtifactNewSuspiciousFileTypes {
+				return ""
+			}
+			return artifactdelta.DeltaIndeterminateReason(pkg)
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.ArtifactNewSuspiciousFileTypes {
+				return nil
+			}
+			return artifactdelta.CheckNewSuspiciousFileTypes(pkg)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.ArtifactNewSuspiciousFileTypes {
+				return ""
+			}
+			return "artifact new suspicious file type delta checks enabled"
+		},
+	},
+	{
+		id:         "artifact_size_delta",
+		group:      config.GroupArtifactBehavior,
+		phase:      phaseArtifact,
+		applicable: artifactInspectionAvailable,
+		enabled: func(tiers []policyTier) bool {
+			return anyTier(tiers, func(policy config.PolicyTierConfig) bool { return policy.ArtifactSizeDelta })
+		},
+		evidence: func(pkg report.PackageReport, tiers []policyTier, now time.Time) []string {
+			return append(artifactdelta.Evidence(pkg), booleanThresholdEvidence("tiers", tiers, func(policy config.PolicyTierConfig) bool {
+				return policy.ArtifactSizeDelta
+			}))
+		},
+		indeterminate: func(pkg report.PackageReport, policy config.PolicyTierConfig) string {
+			if !policy.ArtifactSizeDelta {
+				return ""
+			}
+			return artifactdelta.DeltaIndeterminateReason(pkg)
+		},
+		check: func(pkg report.PackageReport, policy config.PolicyTierConfig, now time.Time) []report.Finding {
+			if !policy.ArtifactSizeDelta {
+				return nil
+			}
+			return artifactdelta.CheckSizeDelta(pkg)
+		},
+		summary: func(policy config.PolicyTierConfig) string {
+			if !policy.ArtifactSizeDelta {
+				return ""
+			}
+			return "artifact size delta checks enabled"
 		},
 	},
 }

@@ -11,17 +11,18 @@ import (
 )
 
 type InstallRequest struct {
-	Action       string
-	Ecosystem    ecosystem.Ecosystem
-	Manager      string
-	Command      string
-	Package      ecosystem.PackageSpec
-	Debug        bool
-	Inspect      bool
-	Mode         string
-	ConfigPath   string
-	OutputFormat string
-	PyPIRuntime  PyPIRuntimeOptions
+	Action        string
+	Ecosystem     ecosystem.Ecosystem
+	Manager       string
+	Command       string
+	Package       ecosystem.PackageSpec
+	Debug         bool
+	Inspect       bool
+	Mode          string
+	ConfigPath    string
+	OutputFormat  string
+	ReportVerbose bool
+	PyPIRuntime   PyPIRuntimeOptions
 }
 
 type PyPIRuntimeOptions struct {
@@ -73,6 +74,8 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 			args = remaining
 		case "--debug":
 			req.Debug = true
+		case "-v":
+			req.ReportVerbose = true
 		case "--inspect":
 			if seen["--mode"] {
 				return InstallRequest{}, fmt.Errorf("--inspect cannot be combined with --mode")
@@ -99,8 +102,8 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 			if err != nil {
 				return InstallRequest{}, err
 			}
-			if value != OutputFormatHuman && value != OutputFormatJSON {
-				return InstallRequest{}, fmt.Errorf("unsupported output format %q: supported formats are human and json", value)
+			if value != OutputFormatHuman && value != OutputFormatJSON && value != OutputFormatReport {
+				return InstallRequest{}, fmt.Errorf("unsupported output format %q: supported formats are human, json, and report", value)
 			}
 			req.OutputFormat = value
 			args = remaining
@@ -137,6 +140,13 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 		}
 	}
 
+	if req.ReportVerbose && req.OutputFormat != OutputFormatReport {
+		return InstallRequest{}, fmt.Errorf("-v can only be used with --format report")
+	}
+	if req.Debug && req.OutputFormat == OutputFormatReport {
+		return InstallRequest{}, fmt.Errorf("--debug cannot be combined with --format report; use --debug --format json for debug trace data")
+	}
+
 	if req.Action != ActionRun {
 		if len(args) != 0 {
 			return InstallRequest{}, fmt.Errorf("%s does not accept package-manager arguments", req.Action)
@@ -144,7 +154,7 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 		if req.Action != ActionPrintConfig && req.ConfigPath != "" {
 			return InstallRequest{}, fmt.Errorf("--config can only be used with install commands or --print-config")
 		}
-		if req.Debug || req.Mode != ModeMetadata || req.OutputFormat != OutputFormatHuman || req.hasPyPIRuntimeOptions() {
+		if req.Debug || req.Mode != ModeMetadata || req.OutputFormat != OutputFormatHuman || req.ReportVerbose || req.hasPyPIRuntimeOptions() {
 			return InstallRequest{}, fmt.Errorf("%s cannot be combined with install options", req.Action)
 		}
 		return req, nil
@@ -195,8 +205,9 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 }
 
 const (
-	OutputFormatHuman = "human"
-	OutputFormatJSON  = "json"
+	OutputFormatHuman  = "human"
+	OutputFormatJSON   = "json"
+	OutputFormatReport = "report"
 
 	ActionRun         = "run"
 	ActionHelp        = "help"

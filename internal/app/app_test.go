@@ -60,7 +60,7 @@ func TestRunInfoCommandsDoNotRequirePackageManagerOrRegistry(t *testing.T) {
 		want string
 	}{
 		"help":         {args: []string{"--help"}, want: "--mode metadata"},
-		"version":      {args: []string{"--version"}, want: "SourceGate version: 0.8.1"},
+		"version":      {args: []string{"--version"}, want: "SourceGate version: 0.8.2"},
 		"print config": {args: []string{"--print-config"}, want: `"config_mode"`},
 	}
 
@@ -218,6 +218,102 @@ func TestRunRendersJSONFormat(t *testing.T) {
 	}
 }
 
+func TestRunRendersReportFormat(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/pkg" {
+			t.Fatalf("path = %q, want /pkg", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"name": "pkg",
+			"dist-tags": {"latest": "1.0.0"},
+			"time": {"1.0.0": "2021-02-20T15:42:16.891Z"},
+			"versions": {"1.0.0": {}}
+		}`))
+	}))
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	result, err := newStaticConfigApp(server.Client(), &out, &errOut, config.Config{
+		Policy: config.PolicyConfig{
+			Alert: config.PolicyTierConfig{PrivatePackages: map[string][]string{"npm": {"pkg"}}},
+		},
+	}).Run(context.Background(), []string{"--format", "report", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitAlertFinding {
+		t.Fatalf("exit code = %d, want alert", result.ExitCode)
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", errOut.String())
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("stdout is not report JSON: %v\n%s", err, out.String())
+	}
+	if _, ok := decoded["configuration"]; ok {
+		t.Fatalf("configuration present in regular report: %+v", decoded["configuration"])
+	}
+	command := decoded["command"].(map[string]any)
+	argv := command["argv"].([]any)
+	if command["manager"] != "npm" || command["mode"] != "metadata" || argv[0] != "sourcegate" || argv[1] != "--format" {
+		t.Fatalf("command = %+v, want report command argv", command)
+	}
+	triggered := decoded["triggered_policies"].([]any)
+	if len(triggered) != 1 || !strings.Contains(triggered[0].(map[string]any)["message"].(string), "private/internal") {
+		t.Fatalf("triggered_policies = %+v, want private package finding", triggered)
+	}
+	finalDecision := decoded["final_decision"].(map[string]any)
+	if finalDecision["exit_code"] != float64(ExitAlertFinding) || finalDecision["highest_severity"] != "ALERT" {
+		t.Fatalf("final_decision = %+v, want alert decision", finalDecision)
+	}
+	if strings.Contains(out.String(), "debug_trace") || strings.Contains(out.String(), "recommended") {
+		t.Fatalf("report contains disallowed fields:\n%s", out.String())
+	}
+}
+
+func TestRunRendersVerboseReportFormat(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/pkg" {
+			t.Fatalf("path = %q, want /pkg", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"name": "pkg",
+			"dist-tags": {"latest": "1.0.0"},
+			"time": {"1.0.0": "2021-02-20T15:42:16.891Z"},
+			"versions": {"1.0.0": {}}
+		}`))
+	}))
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	var out bytes.Buffer
+	cfg := config.Config{Policy: config.PolicyConfig{Alert: config.PolicyTierConfig{InstallLifecycleScripts: true}}}
+	result, err := newStaticConfigApp(server.Client(), &out, &bytes.Buffer{}, cfg).Run(context.Background(), []string{"--format", "report", "-v", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitClean {
+		t.Fatalf("exit code = %d, want clean", result.ExitCode)
+	}
+	if !strings.Contains(out.String(), "\"configuration\"") ||
+		!strings.Contains(out.String(), "\"effective_config\"") ||
+		!strings.Contains(out.String(), "\"install_lifecycle_scripts\": true") {
+		t.Fatalf("verbose report missing effective config:\n%s", out.String())
+	}
+}
+
 func TestRunDebugDoesNotChangePyPIFetchBehavior(t *testing.T) {
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -362,6 +458,111 @@ func TestRunInspectDownloadsVerifiedArtifactAndDeletesTempFile(t *testing.T) {
 	}
 }
 
+func TestRunMetadataModeWarnsWhenArtifactPolicyEnabled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/pkg" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"name": "pkg",
+			"dist-tags": {"latest": "1.0.0"},
+			"time": {"1.0.0": "2026-01-01T00:00:00Z"},
+			"versions": {"1.0.0": {}}
+		}`))
+	}))
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	var out bytes.Buffer
+	result, err := newStaticConfigApp(server.Client(), &out, &bytes.Buffer{}, config.Config{
+		Policy: config.PolicyConfig{Alert: config.PolicyTierConfig{ArtifactExecutionSurfaces: true}},
+	}).Run(context.Background(), []string{"npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Report.EvaluationMode != cli.ModeMetadata || len(result.Report.Warnings) != 1 || !strings.Contains(result.Report.Warnings[0], "artifact checks are enabled") {
+		t.Fatalf("report = %+v, want metadata mode artifact warning", result.Report)
+	}
+	if !strings.Contains(out.String(), "Mode: metadata") || !strings.Contains(out.String(), "artifact checks are enabled") {
+		t.Fatalf("output = %s, want mode and artifact warning", out.String())
+	}
+}
+
+func TestRunArtifactDeltaDownloadsPreviousArtifactOnlyWhenDeltaPolicyEnabled(t *testing.T) {
+	selectedContent := testTarGzip(t, "package/new.js", []byte("new"))
+	selectedSum := sha512.Sum512(selectedContent)
+	previousContent := testTarGzip(t, "package/old.js", []byte("old"))
+	previousSum := sha512.Sum512(previousContent)
+	artifactRequests := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pkg":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"name": "pkg",
+				"dist-tags": {"latest": "1.0.0"},
+				"time": {
+					"0.9.0": "2025-01-01T00:00:00Z",
+					"1.0.0": "2026-01-01T00:00:00Z"
+				},
+				"versions": {
+					"0.9.0": {"dist": {
+						"tarball": "` + serverURLPlaceholder + `/pkg-0.9.0.tgz",
+						"integrity": "sha512-` + base64.StdEncoding.EncodeToString(previousSum[:]) + `"
+					}},
+					"1.0.0": {"dist": {
+						"tarball": "` + serverURLPlaceholder + `/pkg-1.0.0.tgz",
+						"integrity": "sha512-` + base64.StdEncoding.EncodeToString(selectedSum[:]) + `"
+					}}
+				}
+			}`))
+		case "/pkg-1.0.0.tgz":
+			artifactRequests[r.URL.Path]++
+			w.Write(selectedContent)
+		case "/pkg-0.9.0.tgz":
+			artifactRequests[r.URL.Path]++
+			w.Write(previousContent)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	withWorkingDirectory(t, t.TempDir())
+	client := rewritePlaceholderClient(server.Client(), server.URL)
+	_, err := newStaticConfigApp(client, &bytes.Buffer{}, &bytes.Buffer{}, config.Config{
+		Policy: config.PolicyConfig{Alert: config.PolicyTierConfig{ArtifactExecutionSurfaces: true}},
+	}).Run(context.Background(), []string{"--mode", "artifact", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("artifact Run without delta returned error: %v", err)
+	}
+	if artifactRequests["/pkg-1.0.0.tgz"] != 1 || artifactRequests["/pkg-0.9.0.tgz"] != 0 {
+		t.Fatalf("artifact requests = %v, want selected artifact only when delta disabled", artifactRequests)
+	}
+
+	artifactRequests = map[string]int{}
+	result, err := newStaticConfigApp(client, &bytes.Buffer{}, &bytes.Buffer{}, config.Config{
+		Policy: config.PolicyConfig{Alert: config.PolicyTierConfig{ArtifactFileListChange: true}},
+	}).Run(context.Background(), []string{"--mode", "artifact", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("artifact Run with delta returned error: %v", err)
+	}
+	if artifactRequests["/pkg-1.0.0.tgz"] != 1 || artifactRequests["/pkg-0.9.0.tgz"] != 1 {
+		t.Fatalf("artifact requests = %v, want selected and previous artifacts when delta enabled", artifactRequests)
+	}
+	if result.Report.ArtifactDelta == nil || result.Report.ArtifactDelta.Status != "COMPARED" || !hasFindingContaining(result.Report.Findings, "file list changed") {
+		t.Fatalf("report = %+v, want compared artifact delta finding", result.Report)
+	}
+}
+
 func TestRunInspectAppliesArchivePolicyFindings(t *testing.T) {
 	content := testTarGzip(t, "../evil.js", []byte("bad"))
 	sum := sha512.Sum512(content)
@@ -467,6 +668,64 @@ func TestRunInspectAppliesExecutionSurfacePolicyFindings(t *testing.T) {
 	}
 	if !hasFindingContaining(result.Report.Findings, "postinstall") {
 		t.Fatalf("findings = %+v, want execution surface finding", result.Report.Findings)
+	}
+}
+
+func TestRunReportFormatIncludesArtifactTriggeredPolicies(t *testing.T) {
+	content := testTarGzip(t, "package/package.json", []byte(`{"scripts":{"postinstall":"node setup.js"}}`))
+	sum := sha512.Sum512(content)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pkg":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"name": "pkg",
+				"dist-tags": {"latest": "1.0.0"},
+				"time": {"1.0.0": "2021-02-20T15:42:16.891Z"},
+				"versions": {"1.0.0": {"dist": {
+					"tarball": "` + serverURLPlaceholder + `/artifact.tgz",
+					"integrity": "sha512-` + base64.StdEncoding.EncodeToString(sum[:]) + `"
+				}}}
+			}`))
+		case "/artifact.tgz":
+			w.Write(content)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	workspace := t.TempDir()
+	configData := groupedConfigJSON(t, `{"policy":{"alert":{"checks":{"artifact_execution_surfaces":true}}}}`)
+	if err := os.WriteFile(filepath.Join(workspace, config.DefaultPath), configData, 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	withWorkingDirectory(t, workspace)
+
+	var out bytes.Buffer
+	result, err := newFileConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &out, &bytes.Buffer{}).Run(context.Background(), []string{"--format", "report", "--mode", "artifact", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitAlertFinding {
+		t.Fatalf("exit code = %d, want alert", result.ExitCode)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("stdout is not report JSON: %v\n%s", err, out.String())
+	}
+	command := decoded["command"].(map[string]any)
+	if command["mode"] != cli.ModeArtifact {
+		t.Fatalf("command = %+v, want artifact mode", command)
+	}
+	triggered := decoded["triggered_policies"].([]any)
+	if len(triggered) != 1 || !strings.Contains(triggered[0].(map[string]any)["message"].(string), "postinstall") {
+		t.Fatalf("triggered_policies = %+v, want artifact execution finding", triggered)
 	}
 }
 
@@ -637,7 +896,7 @@ func TestRunInspectSkipsArtifactDownloadWhenMetadataBlocks(t *testing.T) {
 	defer func() { npm.RegistryBaseURL = oldBase }()
 
 	workspace := t.TempDir()
-	configData := groupedConfigJSON(t, `{"policy":{"block":{"checks":{"minimum_days_since_latest_release":365}}}}`)
+	configData := groupedConfigJSON(t, `{"policy":{"block":{"checks":{"minimum_days_since_latest_release":365}},"alert":{"checks":{"artifact_file_list_change":true}}}}`)
 	if err := os.WriteFile(filepath.Join(workspace, config.DefaultPath), configData, 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -728,7 +987,9 @@ func groupedConfigTier() map[string]any {
 			"release_metadata":  false,
 			"name_protection":   false,
 			"npm_lifecycle":     false,
+			"npm_dependencies":  false,
 			"pypi_artifacts":    false,
+			"source_metadata":   false,
 			"artifact_safety":   false,
 			"artifact_behavior": false,
 		},

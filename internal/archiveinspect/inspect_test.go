@@ -200,6 +200,34 @@ func TestInspectDetectsBehaviorIndicatorsInTextFiles(t *testing.T) {
 	}
 }
 
+func TestInspectDetectsGeneralRiskSignalsFromPathsAndManifestURLs(t *testing.T) {
+	path := writeTarGzip(t, []tarEntry{
+		{name: "package/.env", content: []byte("TOKEN=value")},
+		{name: "package/.github/workflows/ci.yml", content: []byte("name: ci")},
+		{name: "package/Library/LaunchAgents/com.example.agent.plist", content: []byte("plist")},
+		{name: "package/package.json", content: []byte(`{"homepage":"http://192.0.2.10/install","scripts":{"install":"node install.js"}}`)},
+	})
+
+	summary, err := Inspect(path, "pkg-1.0.0.tgz")
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	for _, want := range []string{
+		"sensitive_config_file:.env",
+		"ci_workflow_path:.github/workflows/ci.yml",
+		"startup_or_service_path:LaunchAgents",
+		"manifest_insecure_url:package.json",
+		"manifest_direct_ip_url:package.json",
+	} {
+		if !containsGeneralRiskSignal(summary.GeneralRiskSignalExamples, want) {
+			t.Fatalf("general risk signals = %+v, want %q", summary.GeneralRiskSignalExamples, want)
+		}
+	}
+	if !containsString(summary.Paths, "package/.env") || !containsString(summary.Paths, "package/package.json") {
+		t.Fatalf("paths = %+v, want normalized file paths recorded", summary.Paths)
+	}
+}
+
 func TestInspectBehaviorIndicatorsRespectLimitsAndDeduplicate(t *testing.T) {
 	entries := []tarEntry{
 		{name: "package/repeat.js", content: []byte(`process.env.NPM_TOKEN; process.env.NPM_TOKEN; process.env.NPM_TOKEN;`)},
@@ -413,6 +441,16 @@ func containsSuspiciousFileType(values []report.ArtifactSuspiciousFileType, want
 }
 
 func containsBehaviorIndicator(values []report.ArtifactBehaviorIndicator, want string) bool {
+	parts := strings.SplitN(want, ":", 2)
+	for _, value := range values {
+		if value.Type == parts[0] && strings.Contains(value.Path, parts[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsGeneralRiskSignal(values []report.ArtifactGeneralRiskSignal, want string) bool {
 	parts := strings.SplitN(want, ":", 2)
 	for _, value := range values {
 		if value.Type == parts[0] && strings.Contains(value.Path, parts[1]) {

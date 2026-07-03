@@ -7,7 +7,7 @@ SourceGate supports two config modes:
 
 In relaxed file-config mode, a missing default `sourcegate.config.json` is allowed and means all policy is disabled. A missing explicit `--config <path>` is an operational error.
 
-SourceGate 0.8.1 uses a grouped policy config. Old flat tier configs from 0.8.0 and earlier are rejected. A present file config, explicit config, or embedded config must be one complete JSON value containing `policy`, all three tiers, and every supported group key in each tier.
+SourceGate 0.8.2 uses a grouped policy config. Old flat tier configs from 0.8.0 and earlier are rejected. A present file config, explicit config, or embedded config must be one complete JSON value containing `policy`, all three tiers, and every supported group key in each tier.
 
 Use `sourcegate --print-config` to print JSON config status. The printed effective config is the normalized policy that SourceGate evaluates, so it may show detailed check values rather than the exact grouped input.
 
@@ -33,11 +33,13 @@ Supported groups:
 | Group | Purpose |
 | --- | --- |
 | `release_metadata` | Release age, dormant release, and first-release checks. |
-| `name_protection` | Protected package and protected token checks. |
+| `name_protection` | Protected package, protected token, and private/internal package public-registry checks. |
 | `npm_lifecycle` | npm lifecycle script, suspicious command, history, and dormant-addition checks. |
+| `npm_dependencies` | npm dependency name history and bounded direct dependency lifecycle metadata checks. |
 | `pypi_artifacts` | PyPI artifact history, shape, size, dependency, provenance, and file-count checks. |
+| `source_metadata` | npm registry source, publisher, and release-burst metadata checks. |
 | `artifact_safety` | Artifact unsafe path, file-count, uncompressed-size, and expansion-ratio checks. |
-| `artifact_behavior` | Artifact execution-surface, suspicious file-type, and behavior-indicator checks. |
+| `artifact_behavior` | Artifact execution-surface, suspicious file-type, behavior-indicator, general path/manifest risk, and artifact-delta checks. |
 
 ## Current Example
 
@@ -49,7 +51,9 @@ Supported groups:
         "release_metadata": true,
         "name_protection": false,
         "npm_lifecycle": false,
+        "npm_dependencies": false,
         "pypi_artifacts": false,
+        "source_metadata": false,
         "artifact_safety": false,
         "artifact_behavior": false
       },
@@ -60,7 +64,9 @@ Supported groups:
         "release_metadata": true,
         "name_protection": true,
         "npm_lifecycle": true,
+        "npm_dependencies": true,
         "pypi_artifacts": true,
+        "source_metadata": true,
         "artifact_safety": false,
         "artifact_behavior": true
       },
@@ -76,7 +82,9 @@ Supported groups:
         "release_metadata": false,
         "name_protection": false,
         "npm_lifecycle": true,
+        "npm_dependencies": false,
         "pypi_artifacts": false,
+        "source_metadata": false,
         "artifact_safety": true,
         "artifact_behavior": false
       },
@@ -86,7 +94,7 @@ Supported groups:
 }
 ```
 
-The checked-in config keeps release metadata checks in `inform` and `alert`, blocks suspicious npm install commands, blocks hard archive safety failures, and alerts on PyPI artifact/provenance changes and artifact behavior signals.
+The checked-in config keeps release metadata checks in `inform` and `alert`, blocks suspicious npm install commands, blocks hard archive safety failures, and alerts on npm dependency/source metadata, PyPI artifact/provenance changes, artifact behavior signals, general artifact risk signals, and artifact deltas.
 
 ## Check Overrides
 
@@ -107,7 +115,9 @@ Example: keep the alert-tier npm lifecycle group enabled, but disable only suspi
         "release_metadata": false,
         "name_protection": false,
         "npm_lifecycle": true,
+        "npm_dependencies": false,
         "pypi_artifacts": false,
+        "source_metadata": false,
         "artifact_safety": false,
         "artifact_behavior": false
       },
@@ -132,6 +142,11 @@ Accepted check overrides:
 | `install_lifecycle_history_versions` | integer or `false` | Number of previous npm versions available for immediate-release comparison and reintroduction context. |
 | `suspicious_install_script_commands` | boolean | `true` enables suspicious npm script command pattern findings. |
 | `install_script_added_after_dormancy` | boolean | `true` enables dormant-release npm lifecycle addition findings. |
+| `npm_dependency_history_versions` | integer or `false` | Number of previous npm versions used for dependency-name comparison evidence. |
+| `npm_dependency_change` | boolean | `true` enables selected-vs-immediate-previous npm dependency name change findings. |
+| `npm_direct_dependency_lifecycle_scripts` | boolean | `true` inspects selected direct `dependencies` and `optionalDependencies` for lifecycle scripts. |
+| `npm_direct_dependency_suspicious_install_commands` | boolean | `true` inspects selected direct `dependencies` and `optionalDependencies` for suspicious lifecycle command metadata. |
+| `npm_max_direct_dependencies` | integer or `false` | Maximum direct npm dependencies inspected; overflow is reported as indeterminate evidence. |
 | `pypi_artifact_history_versions` | integer or `false` | Number of previous PyPI releases to compare. |
 | `pypi_artifact_shape_change` | boolean | `true` enables PyPI artifact shape change findings. |
 | `pypi_file_size_jump_percent` | integer or `false` | Percentage increase threshold for size jumps. |
@@ -147,8 +162,21 @@ Accepted check overrides:
 | `artifact_execution_surfaces` | boolean | `true` enables install/build execution-surface findings during `--mode artifact`. |
 | `artifact_suspicious_file_types` | boolean | `true` enables native/executable file type findings during `--mode artifact`. |
 | `artifact_behavior_indicators` | boolean | `true` enables suspicious behavior indicator findings during `--mode artifact`. |
+| `artifact_general_risk_signals` | boolean | `true` enables general path and manifest metadata risk signal findings during `--mode artifact`. |
+| `artifact_file_list_change` | boolean | `true` enables selected-vs-immediate-previous artifact file-list delta findings during `--mode artifact`. |
+| `artifact_new_execution_surfaces` | boolean | `true` enables findings for execution surfaces newly added since the previous artifact. |
+| `artifact_new_suspicious_file_types` | boolean | `true` enables findings for suspicious native/executable file types newly added since the previous artifact. |
+| `artifact_size_delta` | boolean | `true` enables file-count and uncompressed-size delta findings. |
 | `protected_packages` | map or `false` | Map keyed by ecosystem; `false` disables protected package checks for the tier. |
 | `protected_tokens` | map or `false` | Map keyed by ecosystem; `false` disables protected token checks for the tier. |
+| `private_packages` | map or `false` | Map keyed by ecosystem; exact configured private/internal package names resolved from public registries produce findings. |
+| `npm_git_head_missing` | boolean | `true` enables findings when selected npm version metadata lacks `gitHead`. |
+| `npm_repository_missing` | boolean | `true` enables findings when npm registry metadata lacks a repository URL. |
+| `npm_git_head_changed_after_dormancy` | boolean | `true` enables findings when npm `gitHead` changes after the same tier's dormancy threshold. |
+| `npm_repository_changed` | boolean | `true` enables findings when npm repository URL metadata changes from the immediate previous release. |
+| `npm_publisher_changed` | boolean | `true` enables findings when npm `_npmUser` publisher metadata changes from the immediate previous release. |
+| `npm_release_burst_count` | integer or `false` | Release count threshold for npm release-burst findings. |
+| `npm_release_burst_window_hours` | integer or `false` | Hour window paired with `npm_release_burst_count`. |
 
 ## Check Behavior
 
@@ -166,11 +194,21 @@ Accepted check overrides:
 
 `install_script_added_after_dormancy` emits npm-only findings when the selected release adds or reintroduces a lifecycle script after the same tier's configured dormancy threshold.
 
+`npm_dependency_change` compares selected npm dependency names with the immediate previous eligible release. It compares dependency names grouped by `dependencies`, `optionalDependencies`, `peerDependencies`, and `devDependencies`; version-range changes are not findings in the first implementation.
+
+`npm_direct_dependency_lifecycle_scripts` and `npm_direct_dependency_suspicious_install_commands` fetch public npm metadata for selected direct `dependencies` and `optionalDependencies` only. They do not recurse. Exact semver ranges select that exact version; non-exact ranges use the dependency package's `latest` metadata and record that limitation in debug evidence. `npm_max_direct_dependencies` bounds registry fetches.
+
+`private_packages` is an exact-name policy for public-registry resolution of configured private/internal package names. It uses the same ecosystem normalization as protected package names.
+
+`npm_git_head_missing`, `npm_repository_missing`, `npm_git_head_changed_after_dormancy`, `npm_repository_changed`, `npm_publisher_changed`, and `npm_release_burst_*` use npm registry metadata only. They do not fetch GitHub, verify tags, compare source archives, or claim maintainer compromise.
+
 `pypi_artifact_shape_change`, `pypi_file_size_jump_percent`, `pypi_dependency_change`, `pypi_provenance_required`, and `pypi_release_file_count_change` inspect PyPI release-file metadata, version-specific metadata, dependencies, and Integrity API provenance where enabled.
 
 When `pypi_provenance_scope` is `install-target`, SourceGate runs local `<python> -m pip debug --verbose` to resolve Python compatibility tags. It does not install packages. If tag inspection fails, compatible-wheel provenance is marked indeterminate and source-distribution provenance remains checkable.
 
-Artifact checks run only with `--mode artifact`, after the selected artifact is downloaded to a temporary file and its registry digest is verified. SourceGate reads archive metadata without extracting files, executing code, invoking package managers, or following links.
+Artifact checks run only with `--mode artifact`, after the selected artifact is downloaded to a temporary file and its registry digest is verified. SourceGate reads archive metadata without extracting files, executing code, invoking package managers, or following links. If artifact policy is enabled but the command runs in metadata mode, output includes a warning and JSON includes `report.evaluation_mode`.
+
+Artifact general risk signals are limited to archive paths and package manifest/install metadata already read by artifact inspection, such as sensitive config filenames, CI workflow paths, startup/service-like paths, insecure HTTP URLs, and direct IP URLs. Artifact delta checks compare the selected artifact with the immediate previous comparable artifact by normalized file paths, newly added execution surfaces, newly added suspicious native/executable file types, file count, and uncompressed size.
 
 ## PyPI Runtime Defaults
 
@@ -197,13 +235,19 @@ SourceGate accepts an absent default config file in relaxed mode as disabled pol
 
 Numeric threshold values accept non-negative integers or `false`; negative values are rejected.
 
-`protected_packages` and `protected_tokens` only accept `npm` and `pypi` ecosystem keys, and entries cannot be empty strings.
+`protected_packages`, `protected_tokens`, and `private_packages` only accept `npm` and `pypi` ecosystem keys, and entries cannot be empty strings.
 
 Each tier must set `pypi_provenance_scope` to `false` or omit the check when `pypi_provenance_required` resolves to `false`. When provenance is required, the tier must configure one supported scope.
 
 Companion settings are validated within the same tier:
 
 - `install_script_added_after_dormancy` requires positive `install_lifecycle_history_versions` and `dormant_release_threshold_days`.
+- `npm_dependency_change` requires positive `npm_dependency_history_versions`.
+- Positive `npm_dependency_history_versions` requires `npm_dependency_change`.
+- Direct npm dependency checks require positive `npm_max_direct_dependencies`.
+- Positive `npm_max_direct_dependencies` requires at least one direct npm dependency check.
+- `npm_git_head_changed_after_dormancy` requires positive `dormant_release_threshold_days`.
+- `npm_release_burst_count` and `npm_release_burst_window_hours` must be configured together.
 - Any history-dependent PyPI check requires positive `pypi_artifact_history_versions`.
 - Positive `pypi_artifact_history_versions` requires at least one history-dependent PyPI check.
 - `pypi_include_optional_dependencies` requires `pypi_dependency_change`.

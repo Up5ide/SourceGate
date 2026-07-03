@@ -5,7 +5,9 @@
         "release_metadata": true,
         "name_protection": false,
         "npm_lifecycle": false,
+        "npm_dependencies": false,
         "pypi_artifacts": false,
+        "source_metadata": false,
         "artifact_safety": false,
         "artifact_behavior": false
       },
@@ -16,7 +18,9 @@
         "release_metadata": true,
         "name_protection": true,
         "npm_lifecycle": true,
+        "npm_dependencies": true,
         "pypi_artifacts": true,
+        "source_metadata": true,
         "artifact_safety": false,
         "artifact_behavior": true
       },
@@ -32,7 +36,9 @@
         "release_metadata": false,
         "name_protection": false,
         "npm_lifecycle": true,
+        "npm_dependencies": false,
         "pypi_artifacts": false,
+        "source_metadata": false,
         "artifact_safety": true,
         "artifact_behavior": false
       },

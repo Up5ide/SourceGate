@@ -3,9 +3,9 @@
 ## Project Purpose
 
 SourceGate is a Go CLI and pre-install security gate that inspects package registry metadata before a package install is trusted.
-It accepts install-shaped commands for npm and pip, fetches public registry metadata, evaluates deterministic policy checks, prints human or JSON output, and exits without installing anything in the current release.
+It accepts install-shaped commands for npm and pip, fetches public registry metadata, evaluates deterministic policy checks, prints human, full JSON, or compact report JSON output, and exits without installing anything in the current release.
 
-Default commands currently run in `--mode metadata`. `--mode artifact` additionally downloads one preferred install-target artifact to a verified temporary file and inspects archive metadata, bounded install/build metadata, native/executable file type signals, and high-confidence suspicious behavior indicators without extraction. `--inspect` remains a deprecated alias for `--mode artifact`. `--mode install` is reserved for SourceGate 1.0 and currently returns an operational error.
+Default commands currently run in `--mode metadata`. `--mode artifact` additionally downloads one preferred install-target artifact to a verified temporary file and inspects archive metadata, bounded install/build metadata, native/executable file type signals, general path/manifest risk signals, high-confidence suspicious behavior indicators, and policy-enabled immediate-previous artifact deltas without extraction. `--inspect` remains a deprecated alias for `--mode artifact`. `--mode install` is reserved for SourceGate 1.0 and currently returns an operational error.
 SourceGate does not unpack package contents, broadly scan source code, run package-manager installs, or execute lifecycle scripts.
 PyPI install-target provenance inspection may run local `python -m pip debug --verbose` only to discover compatible tags.
 
@@ -17,8 +17,9 @@ PyPI install-target provenance inspection may run local `python -m pip debug --v
 4. `internal/ecosystem/npm` and `internal/ecosystem/pypi` fetch registry metadata and normalize it into `report.PackageReport`.
 5. `internal/checks` resolves registry-defined checks against policy tiers and appends findings.
 6. For `--mode artifact`, `internal/artifact` downloads and verifies the selected artifact unless metadata policy blocks it.
-7. `internal/archiveinspect` reads the verified archive inventory, hard archive safety metadata, bounded install/build execution-surface metadata, small file prefixes for native/executable signatures, and capped text/source files for suspicious behavior indicators without extracting files.
-8. `internal/output` renders human-readable or JSON results.
+7. `internal/archiveinspect` reads the verified archive inventory, hard archive safety metadata, bounded install/build execution-surface metadata, general path/manifest risk signals, small file prefixes for native/executable signatures, and capped text/source files for suspicious behavior indicators without extracting files.
+8. When artifact-delta policy is enabled, `internal/app` downloads the immediate previous comparable artifact through the same verifier and compares archive inventory and metadata-derived surfaces.
+9. `internal/output` renders human-readable or JSON results.
 
 ## Important Files And Folders
 
@@ -74,6 +75,9 @@ npm checks:
 - suspicious lifecycle command patterns
 - lifecycle script history changes
 - lifecycle script added after package dormancy
+- dependency name changes compared with the immediate previous eligible release
+- bounded direct `dependencies` and `optionalDependencies` lifecycle metadata inspection
+- registry-provided repository URL, `gitHead`, publisher metadata changes, and release bursts
 
 PyPI checks:
 
@@ -91,18 +95,21 @@ PyPI checks:
 - artifact expansion-ratio limits
 - install/build execution surfaces from bounded metadata, including npm lifecycle scripts and `bin` entries, npm native build hints, PyPI build files/backends, wheel entry points, `.pth` startup files, wheel scripts, and common shell/build files
 - suspicious native/executable file types, including native extensions, shared libraries, installers, object/static libraries, PE, ELF, Mach-O, WebAssembly, and Java class bytecode
+- general path and manifest risk signals, including sensitive config filenames, CI workflow paths, startup/service-like paths, insecure HTTP URLs, and direct IP URLs in bounded package metadata
+- selected-vs-immediate-previous artifact deltas for normalized file paths, newly added execution surfaces, newly added suspicious native/executable file types, file count, and uncompressed size
 - suspicious behavior indicators in capped text/source files, including download-and-execute patterns, PowerShell download/execute patterns, Node/Python process execution APIs, credential or environment access, cloud metadata endpoints, and decoded-string execution patterns
 
-History-dependent npm lifecycle and PyPI dependency checks compare with the immediate previous eligible release. Older npm lifecycle history is used only to identify reintroductions. Only immediate-previous PyPI version-specific dependency metadata should be fetched, and only when a dependency-change policy is enabled.
+History-dependent npm lifecycle, npm dependency/source metadata, and PyPI dependency checks compare with the immediate previous eligible release. Older npm lifecycle history is used only to identify reintroductions. Only immediate-previous PyPI version-specific dependency metadata should be fetched, and only when a dependency-change policy is enabled. Direct npm dependency inspection is non-recursive and bounded by policy.
 
 For PyPI `install-target` provenance, a failed `pip debug` compatibility lookup must produce an indeterminate policy result for compatible wheels. Do not guess compatibility from the configured platform or host; source-distribution provenance can still be evaluated.
 
 ## Output And Exit Codes
 
-Default output is human-readable.
-`--format json` emits structured JSON with the evaluated package report.
+Default output is human-readable and includes `Mode: metadata|artifact`.
+`--format json` emits full structured JSON with the evaluated package report.
+`--format report` emits compact deterministic JSON for tools and AI agents with a purpose stub, command arguments, package identity, triggered findings, and final policy decision. `--format report -v` additionally includes config status and effective normalized configuration.
 `--debug` appends or includes a bounded evaluation trace without enabling disabled checks or changing behavior.
-`--mode artifact` downloads one preferred install-target artifact, verifies it, inspects supported archive metadata, bounded execution-surface metadata, native/executable file type signals, and bounded suspicious behavior indicators, reports the result, and deletes the temporary file. It never installs the package.
+`--mode artifact` downloads one preferred install-target artifact, verifies it, inspects supported archive metadata, bounded execution-surface metadata, native/executable file type signals, general path/manifest risk signals, bounded suspicious behavior indicators, and policy-enabled artifact deltas, reports the result, and deletes temporary files. It never installs the package.
 
 Exit codes:
 
@@ -122,5 +129,5 @@ Config changes usually require updates in config structs, raw grouped parsing, v
 
 ## Known Boundaries And Future Work
 
-Current non-goals include archive extraction, broad package-content scanning, deep binary analysis, dependency resolution, runtime malware analysis, and real install enforcement.
+Current non-goals include archive extraction, broad package-content scanning, deep binary analysis, recursive dependency resolution, runtime malware analysis, remote source repository verification, and real install enforcement.
 Future work may include deeper scanning of verified downloaded archives without installation, stronger dependency-confusion and typosquatting checks, source repository analysis, and broader suspicious file/code indicators.

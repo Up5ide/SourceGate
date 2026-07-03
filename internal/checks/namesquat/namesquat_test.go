@@ -127,3 +127,19 @@ func TestProtectedTokenScopedUnknownPackageCreatesFinding(t *testing.T) {
 		t.Fatalf("severity = %q, want empty severity", findings[0].Severity)
 	}
 }
+
+func TestPrivatePackagePublicRegistryCreatesFinding(t *testing.T) {
+	findings := CheckPrivatePackages(report.PackageReport{
+		Ecosystem: "npm",
+		Registry:  "npm registry",
+		Name:      "@Internal/Core",
+	}, config.PolicyTierConfig{
+		PrivatePackages: map[string][]string{
+			"npm": {"@internal/core"},
+		},
+	})
+
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want exact private package finding", findings)
+	}
+}

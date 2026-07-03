@@ -11,6 +11,7 @@ import (
 func RenderHuman(w io.Writer, pkg report.PackageReport) {
 	fmt.Fprintf(w, "Ecosystem: %s\n", pkg.Ecosystem)
 	fmt.Fprintf(w, "Registry: %s\n", pkg.Registry)
+	fmt.Fprintf(w, "Mode: %s\n", valueOrUnknown(pkg.EvaluationMode))
 	fmt.Fprintf(w, "Package: %s\n", valueOrUnknown(pkg.Name))
 	fmt.Fprintf(w, "Selected Version: %s\n", valueOrUnknown(pkg.SelectedVersion))
 	fmt.Fprintf(w, "Selected Published: %s\n", valueOrUnknown(pkg.SelectedPublishedAt))
@@ -30,6 +31,21 @@ func RenderHuman(w io.Writer, pkg report.PackageReport) {
 		for _, url := range pkg.ProjectURLs {
 			fmt.Fprintf(w, "  - %s\n", url)
 		}
+	}
+	if hasNPMSourceMetadata(pkg.NPMSource) {
+		fmt.Fprintln(w, "NPM Source Metadata:")
+		fmt.Fprintf(w, "  Repository URL: %s\n", valueOrUnknown(pkg.NPMSource.RepositoryURL))
+		fmt.Fprintf(w, "  Selected gitHead: %s\n", valueOrUnknown(pkg.NPMSource.SelectedGitHead))
+		fmt.Fprintf(w, "  Previous gitHead: %s\n", valueOrUnknown(pkg.NPMSource.PreviousGitHead))
+		fmt.Fprintf(w, "  Selected Publisher: %s\n", valueOrUnknown(pkg.NPMSource.SelectedPublisher))
+		fmt.Fprintf(w, "  Previous Publisher: %s\n", valueOrUnknown(pkg.NPMSource.PreviousPublisher))
+	}
+	if len(pkg.NPMDirectDependencies) > 0 || pkg.NPMDirectDependencyOverflow > 0 {
+		fmt.Fprintf(w, "NPM Direct Dependencies Inspected: %d", len(pkg.NPMDirectDependencies))
+		if pkg.NPMDirectDependencyOverflow > 0 {
+			fmt.Fprintf(w, " (%d skipped by limit)", pkg.NPMDirectDependencyOverflow)
+		}
+		fmt.Fprintln(w)
 	}
 	if pkg.PolicySummary != "" {
 		fmt.Fprintf(w, "Policy: %s\n", pkg.PolicySummary)
@@ -87,6 +103,30 @@ func RenderHuman(w io.Writer, pkg report.PackageReport) {
 		for _, indicator := range pkg.ArtifactInspection.BehaviorIndicatorExamples {
 			fmt.Fprintf(w, "    - %s\n", behaviorIndicatorDisplay(indicator))
 		}
+		fmt.Fprintf(w, "  General Risk Signals: %d\n", pkg.ArtifactInspection.GeneralRiskSignalCount)
+		for _, signal := range pkg.ArtifactInspection.GeneralRiskSignalExamples {
+			fmt.Fprintf(w, "    - %s\n", generalRiskSignalDisplay(signal))
+		}
+	}
+	if pkg.ArtifactDelta != nil {
+		fmt.Fprintln(w, "Artifact Delta:")
+		fmt.Fprintf(w, "  Status: %s\n", valueOrUnknown(pkg.ArtifactDelta.Status))
+		fmt.Fprintf(w, "  Previous Artifact: %s\n", valueOrUnknown(pkg.ArtifactDelta.PreviousFilename))
+		if pkg.ArtifactDelta.PreviousArtifactUnavailableMessage != "" {
+			fmt.Fprintf(w, "  Previous Artifact Unavailable: %s\n", pkg.ArtifactDelta.PreviousArtifactUnavailableMessage)
+		}
+		fmt.Fprintf(w, "  Added Paths: %d\n", pkg.ArtifactDelta.AddedPathCount)
+		for _, path := range pkg.ArtifactDelta.AddedPathExamples {
+			fmt.Fprintf(w, "    + %s\n", path)
+		}
+		fmt.Fprintf(w, "  Removed Paths: %d\n", pkg.ArtifactDelta.RemovedPathCount)
+		for _, path := range pkg.ArtifactDelta.RemovedPathExamples {
+			fmt.Fprintf(w, "    - %s\n", path)
+		}
+		fmt.Fprintf(w, "  New Execution Surfaces: %d\n", pkg.ArtifactDelta.NewExecutionSurfaceCount)
+		fmt.Fprintf(w, "  New Suspicious File Types: %d\n", pkg.ArtifactDelta.NewSuspiciousFileTypeCount)
+		fmt.Fprintf(w, "  File Count Delta: %+d\n", pkg.ArtifactDelta.FileCountDelta)
+		fmt.Fprintf(w, "  Uncompressed Size Delta: %+d bytes\n", pkg.ArtifactDelta.UncompressedSizeDeltaBytes)
 	}
 
 	fmt.Fprintln(w)
@@ -115,6 +155,15 @@ func valueOrUnknown(value string) string {
 		return "unknown"
 	}
 	return value
+}
+
+func hasNPMSourceMetadata(source report.NPMSourceMetadata) bool {
+	return source.RepositoryURL != "" ||
+		source.PreviousRepositoryURL != "" ||
+		source.SelectedGitHead != "" ||
+		source.PreviousGitHead != "" ||
+		source.SelectedPublisher != "" ||
+		source.PreviousPublisher != ""
 }
 
 func decisionOrInspectOnly(decision report.Decision) report.Decision {
@@ -147,6 +196,18 @@ func behaviorIndicatorDisplay(indicator report.ArtifactBehaviorIndicator) string
 	parts := []string{indicator.Type, indicator.Path, indicator.Reason}
 	if strings.TrimSpace(indicator.Detail) != "" {
 		parts = append(parts, indicator.Detail)
+	}
+	return strings.Join(parts, " ")
+}
+
+func generalRiskSignalDisplay(signal report.ArtifactGeneralRiskSignal) string {
+	parts := []string{signal.Type}
+	if strings.TrimSpace(signal.Path) != "" {
+		parts = append(parts, signal.Path)
+	}
+	parts = append(parts, signal.Reason)
+	if strings.TrimSpace(signal.Detail) != "" {
+		parts = append(parts, signal.Detail)
 	}
 	return strings.Join(parts, " ")
 }

@@ -13,6 +13,7 @@ func Check(pkg report.PackageReport, policy config.PolicyTierConfig) []report.Fi
 	var findings []report.Finding
 	findings = append(findings, CheckProtectedPackages(pkg, policy)...)
 	findings = append(findings, CheckProtectedTokens(pkg, policy)...)
+	findings = append(findings, CheckPrivatePackages(pkg, policy)...)
 	return findings
 }
 
@@ -36,6 +37,22 @@ func CheckProtectedTokens(pkg report.PackageReport, policy config.PolicyTierConf
 	packageName := NormalizePackageName(ecosystemKey, pkg.Name)
 	protectedPackages := normalizedSet(ecosystemKey, policy.ProtectedPackages[ecosystemKey])
 	return protectedTokenUse(packageName, protectedPackages, policy.ProtectedTokens[ecosystemKey])
+}
+
+func CheckPrivatePackages(pkg report.PackageReport, policy config.PolicyTierConfig) []report.Finding {
+	ecosystemKey := reportEcosystemKey(pkg)
+	if ecosystemKey == "" || !isPublicRegistry(pkg) {
+		return nil
+	}
+
+	packageName := NormalizePackageName(ecosystemKey, pkg.Name)
+	privatePackages := normalizedSet(ecosystemKey, policy.PrivatePackages[ecosystemKey])
+	if _, ok := privatePackages[packageName]; !ok {
+		return nil
+	}
+	return []report.Finding{{
+		Message: "package name exactly matches configured private/internal package " + packageName + " but resolved from public " + pkg.Registry,
+	}}
 }
 
 func protectedPackageTypos(packageName string, protectedPackages map[string]struct{}) []report.Finding {
@@ -93,6 +110,17 @@ func reportEcosystemKey(pkg report.PackageReport) string {
 		return string(ecosystem.PyPI)
 	default:
 		return ""
+	}
+}
+
+func isPublicRegistry(pkg report.PackageReport) bool {
+	switch reportEcosystemKey(pkg) {
+	case string(ecosystem.NPM):
+		return strings.Contains(strings.ToLower(pkg.Registry), "npm")
+	case string(ecosystem.PyPI):
+		return strings.Contains(strings.ToLower(pkg.Registry), "pypi")
+	default:
+		return false
 	}
 }
 

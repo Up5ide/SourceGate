@@ -10,6 +10,7 @@ import (
 
 	"github.com/sourcegate/sourcegate/internal/archiveinspect"
 	"github.com/sourcegate/sourcegate/internal/artifact"
+	"github.com/sourcegate/sourcegate/internal/artifactdelta"
 	"github.com/sourcegate/sourcegate/internal/checks"
 	"github.com/sourcegate/sourcegate/internal/cli"
 	"github.com/sourcegate/sourcegate/internal/config"
@@ -60,6 +61,7 @@ func New(client *http.Client, out, errOut io.Writer) *App {
 }
 
 func (a *App) Run(ctx context.Context, args []string) (RunResult, error) {
+	rawArgs := append([]string(nil), args...)
 	req, err := cli.ParseInstallCommand(args)
 	if err != nil {
 		printUsage(a.errOut)
@@ -103,11 +105,15 @@ func (a *App) Run(ctx context.Context, args []string) (RunResult, error) {
 	if err != nil {
 		return RunResult{ExitCode: ExitOperationalError}, err
 	}
+	pkg.EvaluationMode = req.Mode
 
 	checks.EvaluateWithOptions(&pkg, cfg, time.Now(), checks.EvaluationOptions{
 		Debug: req.Debug,
 	})
 	exitCode := ExitCodeForReport(pkg)
+	if req.Mode == cli.ModeMetadata && checks.ArtifactPolicyEnabled(cfg.Policy) {
+		pkg.Warnings = append(pkg.Warnings, "artifact checks are enabled by policy but did not run because the command used metadata mode.")
+	}
 	if req.Mode == cli.ModeArtifact {
 		if pkg.Decision == report.DecisionBlock {
 			pkg.ArtifactDownload = &report.ArtifactDownloadSummary{Status: report.ArtifactDownloadStatusSkippedBlocked}
@@ -123,6 +129,10 @@ func (a *App) Run(ctx context.Context, args []string) (RunResult, error) {
 			}
 			pkg.ArtifactDownload = &summary
 			pkg.ArtifactInspection = &inspection
+			if checks.RequiresArtifactDelta(cfg.Policy) {
+				delta := a.downloadPreviousArtifactDelta(ctx, pkg)
+				pkg.ArtifactDelta = &delta
+			}
 			checks.EvaluateArtifactInspection(&pkg, cfg, checks.EvaluationOptions{
 				Debug: req.Debug,
 			})
@@ -132,6 +142,21 @@ func (a *App) Run(ctx context.Context, args []string) (RunResult, error) {
 	switch req.OutputFormat {
 	case cli.OutputFormatJSON:
 		if err := output.RenderJSON(a.out, pkg); err != nil {
+			return RunResult{Report: pkg, ExitCode: ExitOperationalError}, err
+		}
+	case cli.OutputFormatReport:
+		var configStatus *configsource.Status
+		if req.ReportVerbose {
+			status := a.configStatus(req.ConfigPath)
+			configStatus = &status
+		}
+		if err := output.RenderReport(a.out, pkg, output.ReportOptions{
+			Argv:         append([]string{"sourcegate"}, rawArgs...),
+			Manager:      req.Manager,
+			Command:      req.Command,
+			ExitCode:     exitCode,
+			ConfigStatus: configStatus,
+		}); err != nil {
 			return RunResult{Report: pkg, ExitCode: ExitOperationalError}, err
 		}
 	default:
@@ -159,20 +184,54 @@ func ExitCodeForReport(pkg report.PackageReport) int {
 	return exitCode
 }
 
+func (a *App) downloadPreviousArtifactDelta(ctx context.Context, pkg report.PackageReport) report.ArtifactDeltaSummary {
+	if pkg.ArtifactInspection == nil {
+		return artifactdelta.Unavailable(pkg.PreviousArtifactCandidate, "selected artifact inspection is unavailable")
+	}
+	candidate := pkg.PreviousArtifactCandidate
+	if candidate.SelectionError != "" {
+		return artifactdelta.Unavailable(candidate, "previous comparable artifact selection failed: "+candidate.SelectionError)
+	}
+	if candidate.URL == "" && candidate.Filename == "" {
+		return artifactdelta.Unavailable(candidate, "immediate previous comparable artifact is unavailable")
+	}
+
+	var previousInspection report.ArtifactInspectionSummary
+	download, err := artifact.DownloadAndVerify(ctx, a.client, candidate, func(path string) error {
+		var inspectErr error
+		previousInspection, inspectErr = archiveinspect.Inspect(path, candidate.Filename)
+		return inspectErr
+	})
+	if err != nil {
+		delta := artifactdelta.Unavailable(candidate, "previous comparable artifact download or inspection failed: "+err.Error())
+		delta.PreviousArtifactDownloadStatus = download.Status
+		delta.PreviousArtifactDigestVerified = download.DigestVerified
+		delta.PreviousArtifactDownloadedSize = download.DownloadedSize
+		delta.PreviousArtifactDigestAlgorithm = download.DigestAlgorithm
+		delta.PreviousArtifactInspectionError = err.Error()
+		return delta
+	}
+	return artifactdelta.Compare(*pkg.ArtifactInspection, previousInspection, candidate, download)
+}
+
 func (a *App) adapterFor(req cli.InstallRequest, cfg config.Config) (ecosystem.Adapter, error) {
 	switch req.Ecosystem {
 	case ecosystem.NPM:
 		return npm.NewWithOptions(a.client, npm.Options{
-			HistoryVersions: checks.RequiredNPMHistoryVersions(cfg.Policy),
-			SelectArtifact:  req.Mode == cli.ModeArtifact,
+			HistoryVersions:           checks.RequiredNPMHistoryVersions(cfg.Policy),
+			SelectArtifact:            req.Mode == cli.ModeArtifact,
+			SelectPreviousArtifact:    req.Mode == cli.ModeArtifact && checks.RequiresArtifactDelta(cfg.Policy),
+			InspectDirectDependencies: checks.RequiresNPMDirectDependencyInspection(cfg.Policy),
+			MaxDirectDependencies:     checks.MaxNPMDirectDependencies(cfg.Policy),
 		}), nil
 	case ecosystem.PyPI:
 		return pypi.NewWithOptions(a.client, pypi.Options{
-			HistoryVersions:   checks.RequiredPyPIArtifactHistoryVersions(cfg.Policy),
-			FetchDependencies: checks.RequiresPyPIDependencyHistory(cfg.Policy),
-			SelectArtifact:    req.Mode == cli.ModeArtifact,
-			ProvenanceScopes:  checks.RequiredPyPIProvenanceScopes(cfg.Policy),
-			Target:            effectivePyPITarget(cfg.PyPIRuntime, req.PyPIRuntime),
+			HistoryVersions:        checks.RequiredPyPIArtifactHistoryVersions(cfg.Policy),
+			FetchDependencies:      checks.RequiresPyPIDependencyHistory(cfg.Policy),
+			SelectArtifact:         req.Mode == cli.ModeArtifact,
+			SelectPreviousArtifact: req.Mode == cli.ModeArtifact && checks.RequiresArtifactDelta(cfg.Policy),
+			ProvenanceScopes:       checks.RequiredPyPIProvenanceScopes(cfg.Policy),
+			Target:                 effectivePyPITarget(cfg.PyPIRuntime, req.PyPIRuntime),
 		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported ecosystem: %s", req.Ecosystem)
@@ -209,9 +268,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  sourcegate --help")
 	fmt.Fprintln(w, "  sourcegate --version")
 	fmt.Fprintln(w, "  sourcegate [--config <path>] --print-config")
-	fmt.Fprintln(w, "  sourcegate [--config <path>] [--mode metadata|artifact|install] [--debug] [--format human|json] npm install <package>[@<version>]")
-	fmt.Fprintln(w, "  sourcegate [--config <path>] [--mode metadata|artifact|install] [--debug] [--format human|json] pip install <package>[==<version>]")
-	fmt.Fprintln(w, "  sourcegate [--config <path>] [--mode metadata|artifact|install] [--debug] [--format human|json] [--python <executable>] [--target-platform <platform>] [--python-version <version>] [--implementation <name>] [--abi <abi>] pip install <package>[==<version>]")
+	fmt.Fprintln(w, "  sourcegate [--config <path>] [--mode metadata|artifact|install] [--debug] [--format human|json|report] [-v] npm install <package>[@<version>]")
+	fmt.Fprintln(w, "  sourcegate [--config <path>] [--mode metadata|artifact|install] [--debug] [--format human|json|report] [-v] pip install <package>[==<version>]")
+	fmt.Fprintln(w, "  sourcegate [--config <path>] [--mode metadata|artifact|install] [--debug] [--format human|json|report] [-v] [--python <executable>] [--target-platform <platform>] [--python-version <version>] [--implementation <name>] [--abi <abi>] pip install <package>[==<version>]")
 	fmt.Fprintln(w, "  sourcegate --inspect ...  (deprecated alias for --mode artifact)")
 }
 
@@ -228,7 +287,8 @@ func printHelp(w io.Writer, configMode, acceptedConfigInputs string) {
 	fmt.Fprintln(w, "  --mode install                 Reserved for SourceGate 1.0; accepted but not implemented yet.")
 	fmt.Fprintln(w, "  --inspect                      Deprecated alias for --mode artifact.")
 	fmt.Fprintln(w, "  --debug                        Include a bounded policy evaluation trace.")
-	fmt.Fprintln(w, "  --format human|json            Select report output format for package inspection.")
+	fmt.Fprintln(w, "  --format human|json|report     Select output format for package inspection.")
+	fmt.Fprintln(w, "  -v                             Include effective configuration with --format report.")
 	fmt.Fprintln(w, "  --python <executable>          Python executable used only for PyPI compatibility-tag inspection.")
 	fmt.Fprintln(w, "  --target-platform <platform>   PyPI target platform override.")
 	fmt.Fprintln(w, "  --python-version <version>     PyPI target Python version override.")

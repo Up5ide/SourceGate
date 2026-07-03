@@ -1,6 +1,12 @@
 # SourceGate Attack Vectors
 
-This document lists package-registry attack vectors that are in scope for SourceGate. Each example is an incident or attack pattern that SourceGate should be able to block or alert on through metadata inspection, archive inspection, lifecycle-script detection, suspicious string/path detection, or policy rules.
+This document lists package-registry attack vectors that are relevant to SourceGate's roadmap. Current SourceGate capability is intentionally split by mode:
+
+- Metadata mode evaluates registry metadata only.
+- Artifact mode adds verified archive inventory, bounded manifest/install metadata, path/file-type signals, and capped high-confidence behavior indicators without extraction.
+- Future install mode is reserved and does not run today.
+
+Rows below may include future detection ideas. Current checks should not be read as broad source-code scanning, malware classification, runtime behavior analysis, or package-manager install enforcement.
 
 | Attack vector | Description | Example | Reference |
 | --- | --- | --- | --- |

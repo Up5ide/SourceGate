@@ -21,7 +21,9 @@ func TestLoadGroupedConfigNormalizesDefaultsAndOverrides(t *testing.T) {
 					"release_metadata": true,
 					"name_protection": true,
 					"npm_lifecycle": true,
+					"npm_dependencies": true,
 					"pypi_artifacts": true,
+					"source_metadata": true,
 					"artifact_behavior": true
 				},
 				"checks": {
@@ -38,6 +40,10 @@ func TestLoadGroupedConfigNormalizesDefaultsAndOverrides(t *testing.T) {
 					"protected_tokens": {
 						"npm": ["tanstack"],
 						"pypi": ["pytest"]
+					},
+					"private_packages": {
+						"npm": ["@internal/core"],
+						"pypi": ["internal-core"]
 					}
 				}
 			},
@@ -83,6 +89,9 @@ func TestLoadGroupedConfigNormalizesDefaultsAndOverrides(t *testing.T) {
 	if !config.Policy.Alert.InstallLifecycleScripts || config.Policy.Alert.InstallLifecycleHistoryVersions != 5 || !config.Policy.Alert.InstallScriptAddedAfterDormancy {
 		t.Fatalf("alert npm lifecycle policy = %+v, want group defaults", config.Policy.Alert)
 	}
+	if config.Policy.Alert.NPMDependencyHistoryVersions != 5 || !config.Policy.Alert.NPMDependencyChange || !config.Policy.Alert.NPMDirectDependencyLifecycleScripts || !config.Policy.Alert.NPMDirectDependencySuspiciousInstallCommands || config.Policy.Alert.NPMMaxDirectDependencies != 25 {
+		t.Fatalf("alert npm dependency policy = %+v, want group defaults", config.Policy.Alert)
+	}
 	if !config.Policy.Block.SuspiciousInstallScriptCommands {
 		t.Fatalf("block suspicious install script commands = false, want true")
 	}
@@ -98,6 +107,12 @@ func TestLoadGroupedConfigNormalizesDefaultsAndOverrides(t *testing.T) {
 	if !config.Policy.Alert.ArtifactExecutionSurfaces || !config.Policy.Alert.ArtifactSuspiciousFileTypes || !config.Policy.Alert.ArtifactBehaviorIndicators {
 		t.Fatalf("alert artifact behavior policy = %+v, want group defaults", config.Policy.Alert)
 	}
+	if !config.Policy.Alert.ArtifactGeneralRiskSignals || !config.Policy.Alert.ArtifactFileListChange || !config.Policy.Alert.ArtifactNewExecutionSurfaces || !config.Policy.Alert.ArtifactNewSuspiciousFileTypes || !config.Policy.Alert.ArtifactSizeDelta {
+		t.Fatalf("alert artifact metadata/delta policy = %+v, want group defaults", config.Policy.Alert)
+	}
+	if !config.Policy.Alert.NPMGitHeadMissing || !config.Policy.Alert.NPMRepositoryMissing || !config.Policy.Alert.NPMGitHeadChangedAfterDormancy || !config.Policy.Alert.NPMRepositoryChanged || !config.Policy.Alert.NPMPublisherChanged || config.Policy.Alert.NPMReleaseBurstCount != 3 || config.Policy.Alert.NPMReleaseBurstWindowHours != 2 {
+		t.Fatalf("alert source metadata policy = %+v, want group defaults", config.Policy.Alert)
+	}
 	if config.Policy.Block.DormantReleaseThresholdDays != 365 || config.Policy.Block.ArtifactMaxFileCount != 20000 || config.Policy.Block.ArtifactMaxUncompressedSizeMB != 1024 || config.Policy.Block.ArtifactMaxExpansionRatio != 100 {
 		t.Fatalf("block policy = %+v, want defaults plus overrides", config.Policy.Block)
 	}
@@ -106,6 +121,9 @@ func TestLoadGroupedConfigNormalizesDefaultsAndOverrides(t *testing.T) {
 	}
 	if len(config.Policy.Alert.ProtectedTokens["pypi"]) != 1 {
 		t.Fatalf("pypi protected tokens = %v, want 1 entry", config.Policy.Alert.ProtectedTokens["pypi"])
+	}
+	if len(config.Policy.Alert.PrivatePackages["npm"]) != 1 {
+		t.Fatalf("npm private packages = %v, want 1 entry", config.Policy.Alert.PrivatePackages["npm"])
 	}
 	if config.PyPIRuntime.TargetPlatform != "linux_x86_64" || config.PyPIRuntime.PythonVersion != "3.12" || config.PyPIRuntime.Implementation != "cp" {
 		t.Fatalf("pypi runtime = %+v, want configured target defaults", config.PyPIRuntime)
@@ -155,7 +173,9 @@ func TestGroupFalseDisablesDefaults(t *testing.T) {
 				"groups": {
 					"release_metadata": false,
 					"npm_lifecycle": false,
+					"npm_dependencies": false,
 					"pypi_artifacts": false,
+					"source_metadata": false,
 					"artifact_behavior": false
 				}
 			}
@@ -164,7 +184,7 @@ func TestGroupFalseDisablesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadBytes returned error: %v", err)
 	}
-	if config.Policy.Alert.AlertOnFirstRelease || config.Policy.Alert.InstallLifecycleScripts || config.Policy.Alert.PyPIDependencyChange || config.Policy.Alert.ArtifactBehaviorIndicators {
+	if config.Policy.Alert.AlertOnFirstRelease || config.Policy.Alert.InstallLifecycleScripts || config.Policy.Alert.NPMDependencyChange || config.Policy.Alert.PyPIDependencyChange || config.Policy.Alert.NPMGitHeadMissing || config.Policy.Alert.ArtifactBehaviorIndicators {
 		t.Fatalf("alert policy = %+v, want disabled group defaults", config.Policy.Alert)
 	}
 }
@@ -219,7 +239,9 @@ func TestLoadAcceptsFalseForIntegerStringAndMapOptions(t *testing.T) {
 				"groups": {
 					"release_metadata": true,
 					"npm_lifecycle": true,
+					"npm_dependencies": true,
 					"pypi_artifacts": true,
+					"source_metadata": true,
 					"artifact_safety": true
 				},
 				"checks": {
@@ -227,6 +249,11 @@ func TestLoadAcceptsFalseForIntegerStringAndMapOptions(t *testing.T) {
 					"dormant_release_threshold_days": false,
 					"install_lifecycle_history_versions": false,
 					"install_script_added_after_dormancy": false,
+					"npm_dependency_history_versions": false,
+					"npm_dependency_change": false,
+					"npm_direct_dependency_lifecycle_scripts": false,
+					"npm_direct_dependency_suspicious_install_commands": false,
+					"npm_max_direct_dependencies": false,
 					"pypi_artifact_history_versions": false,
 					"pypi_artifact_shape_change": false,
 					"pypi_file_size_jump_percent": false,
@@ -238,7 +265,15 @@ func TestLoadAcceptsFalseForIntegerStringAndMapOptions(t *testing.T) {
 					"artifact_max_uncompressed_size_mb": false,
 					"artifact_max_expansion_ratio": false,
 					"protected_packages": false,
-					"protected_tokens": false
+					"protected_tokens": false,
+					"private_packages": false,
+					"npm_git_head_missing": false,
+					"npm_repository_missing": false,
+					"npm_git_head_changed_after_dormancy": false,
+					"npm_repository_changed": false,
+					"npm_publisher_changed": false,
+					"npm_release_burst_count": false,
+					"npm_release_burst_window_hours": false
 				}
 			}
 		}
@@ -247,10 +282,10 @@ func TestLoadAcceptsFalseForIntegerStringAndMapOptions(t *testing.T) {
 		t.Fatalf("LoadBytes returned error: %v", err)
 	}
 
-	if config.Policy.Alert.MinimumDaysSinceLatestRelease != 0 || config.Policy.Alert.DormantReleaseThresholdDays != 0 || config.Policy.Alert.InstallLifecycleHistoryVersions != 0 || config.Policy.Alert.PyPIArtifactHistoryVersions != 0 || config.Policy.Alert.PyPIFileSizeJumpPercent != 0 || config.Policy.Alert.PyPIProvenanceScope != "" || config.Policy.Alert.ArtifactMaxFileCount != 0 || config.Policy.Alert.ArtifactMaxUncompressedSizeMB != 0 || config.Policy.Alert.ArtifactMaxExpansionRatio != 0 {
+	if config.Policy.Alert.MinimumDaysSinceLatestRelease != 0 || config.Policy.Alert.DormantReleaseThresholdDays != 0 || config.Policy.Alert.InstallLifecycleHistoryVersions != 0 || config.Policy.Alert.NPMDependencyHistoryVersions != 0 || config.Policy.Alert.NPMMaxDirectDependencies != 0 || config.Policy.Alert.PyPIArtifactHistoryVersions != 0 || config.Policy.Alert.PyPIFileSizeJumpPercent != 0 || config.Policy.Alert.PyPIProvenanceScope != "" || config.Policy.Alert.ArtifactMaxFileCount != 0 || config.Policy.Alert.ArtifactMaxUncompressedSizeMB != 0 || config.Policy.Alert.ArtifactMaxExpansionRatio != 0 || config.Policy.Alert.NPMReleaseBurstCount != 0 || config.Policy.Alert.NPMReleaseBurstWindowHours != 0 {
 		t.Fatalf("alert policy = %+v, want neutral false values", config.Policy.Alert)
 	}
-	if len(config.Policy.Alert.ProtectedPackages) != 0 || len(config.Policy.Alert.ProtectedTokens) != 0 {
+	if len(config.Policy.Alert.ProtectedPackages) != 0 || len(config.Policy.Alert.ProtectedTokens) != 0 || len(config.Policy.Alert.PrivatePackages) != 0 {
 		t.Fatalf("protected names = %v/%v, want empty maps", config.Policy.Alert.ProtectedPackages, config.Policy.Alert.ProtectedTokens)
 	}
 }
@@ -259,8 +294,10 @@ func TestLoadRejectsInvalidProtectedNameConfig(t *testing.T) {
 	cases := map[string]string{
 		"unsupported package ecosystem": `{"policy":{"alert":{"checks":{"protected_packages":{"cargo":["serde"]}}}}}`,
 		"unsupported token ecosystem":   `{"policy":{"block":{"checks":{"protected_tokens":{"cargo":["serde"]}}}}}`,
+		"unsupported private ecosystem": `{"policy":{"block":{"checks":{"private_packages":{"cargo":["serde"]}}}}}`,
 		"empty package":                 `{"policy":{"inform":{"checks":{"protected_packages":{"npm":[" "]}}}}}`,
 		"empty token":                   `{"policy":{"alert":{"checks":{"protected_tokens":{"pypi":[""]}}}}}`,
+		"empty private package":         `{"policy":{"alert":{"checks":{"private_packages":{"npm":[""]}}}}}`,
 	}
 
 	for name, content := range cases {
@@ -334,11 +371,15 @@ func TestLoadRejectsNegativeTierThresholds(t *testing.T) {
 		"negative release age":                `{"policy":{"alert":{"checks":{"minimum_days_since_latest_release":-1}}}}`,
 		"negative dormant":                    `{"policy":{"block":{"checks":{"dormant_release_threshold_days":-1}}}}`,
 		"negative lifecycle history versions": `{"policy":{"inform":{"checks":{"install_lifecycle_history_versions":-1}}}}`,
+		"negative npm dependency history":     `{"policy":{"inform":{"checks":{"npm_dependency_history_versions":-1}}}}`,
+		"negative npm dependency limit":       `{"policy":{"inform":{"checks":{"npm_max_direct_dependencies":-1}}}}`,
 		"negative pypi history versions":      `{"policy":{"alert":{"checks":{"pypi_artifact_history_versions":-1}}}}`,
 		"negative pypi size jump percent":     `{"policy":{"block":{"checks":{"pypi_file_size_jump_percent":-1}}}}`,
 		"negative artifact file count":        `{"policy":{"alert":{"checks":{"artifact_max_file_count":-1}}}}`,
 		"negative artifact size":              `{"policy":{"block":{"checks":{"artifact_max_uncompressed_size_mb":-1}}}}`,
 		"negative artifact expansion":         `{"policy":{"inform":{"checks":{"artifact_max_expansion_ratio":-1}}}}`,
+		"negative npm release burst count":    `{"policy":{"inform":{"checks":{"npm_release_burst_count":-1}}}}`,
+		"negative npm release burst window":   `{"policy":{"inform":{"checks":{"npm_release_burst_window_hours":-1}}}}`,
 	}
 
 	for name, content := range cases {
@@ -414,11 +455,18 @@ func TestLoadAcceptsUTF8BOMAndRejectsTrailingJSON(t *testing.T) {
 
 func TestLoadRejectsMissingSameTierCompanionOptions(t *testing.T) {
 	cases := map[string]string{
-		"dormant script history":          `{"policy":{"alert":{"checks":{"install_script_added_after_dormancy":true,"dormant_release_threshold_days":180,"install_lifecycle_history_versions":false}}}}`,
-		"dormant script threshold":        `{"policy":{"alert":{"checks":{"install_script_added_after_dormancy":true,"dormant_release_threshold_days":false,"install_lifecycle_history_versions":5}}}}`,
-		"PyPI shape history":              `{"policy":{"alert":{"checks":{"pypi_artifact_shape_change":true,"pypi_artifact_history_versions":false}}}}`,
-		"PyPI optional dependency parent": `{"policy":{"alert":{"checks":{"pypi_include_optional_dependencies":true,"pypi_dependency_change":false}}}}`,
-		"orphan PyPI history":             `{"policy":{"alert":{"checks":{"pypi_artifact_history_versions":5}}}}`,
+		"dormant script history":           `{"policy":{"alert":{"checks":{"install_script_added_after_dormancy":true,"dormant_release_threshold_days":180,"install_lifecycle_history_versions":false}}}}`,
+		"dormant script threshold":         `{"policy":{"alert":{"checks":{"install_script_added_after_dormancy":true,"dormant_release_threshold_days":false,"install_lifecycle_history_versions":5}}}}`,
+		"npm dependency history":           `{"policy":{"alert":{"checks":{"npm_dependency_change":true,"npm_dependency_history_versions":false}}}}`,
+		"orphan npm dependency history":    `{"policy":{"alert":{"checks":{"npm_dependency_history_versions":5}}}}`,
+		"npm direct dependency limit":      `{"policy":{"alert":{"checks":{"npm_direct_dependency_lifecycle_scripts":true,"npm_max_direct_dependencies":false}}}}`,
+		"orphan npm direct dependency max": `{"policy":{"alert":{"checks":{"npm_max_direct_dependencies":5}}}}`,
+		"npm gitHead dormancy threshold":   `{"policy":{"alert":{"checks":{"npm_git_head_changed_after_dormancy":true,"dormant_release_threshold_days":false}}}}`,
+		"npm release burst count":          `{"policy":{"alert":{"checks":{"npm_release_burst_count":3,"npm_release_burst_window_hours":false}}}}`,
+		"npm release burst window":         `{"policy":{"alert":{"checks":{"npm_release_burst_count":false,"npm_release_burst_window_hours":2}}}}`,
+		"PyPI shape history":               `{"policy":{"alert":{"checks":{"pypi_artifact_shape_change":true,"pypi_artifact_history_versions":false}}}}`,
+		"PyPI optional dependency parent":  `{"policy":{"alert":{"checks":{"pypi_include_optional_dependencies":true,"pypi_dependency_change":false}}}}`,
+		"orphan PyPI history":              `{"policy":{"alert":{"checks":{"pypi_artifact_history_versions":5}}}}`,
 	}
 
 	for name, content := range cases {
@@ -457,7 +505,9 @@ func baseTierConfig() map[string]any {
 			"release_metadata":  false,
 			"name_protection":   false,
 			"npm_lifecycle":     false,
+			"npm_dependencies":  false,
 			"pypi_artifacts":    false,
+			"source_metadata":   false,
 			"artifact_safety":   false,
 			"artifact_behavior": false,
 		},

@@ -297,9 +297,9 @@ func TestEvaluateLeavesInspectOnlyWhenDisabled(t *testing.T) {
 func TestEvaluateLeavesInspectOnlyWhenGroupedConfigDisablesPolicy(t *testing.T) {
 	cfg, err := config.LoadBytes([]byte(`{
 		"policy": {
-			"inform": {"groups": {"release_metadata": false, "name_protection": false, "npm_lifecycle": false, "pypi_artifacts": false, "artifact_safety": false, "artifact_behavior": false}},
-			"alert": {"groups": {"release_metadata": false, "name_protection": false, "npm_lifecycle": false, "pypi_artifacts": false, "artifact_safety": false, "artifact_behavior": false}},
-			"block": {"groups": {"release_metadata": false, "name_protection": false, "npm_lifecycle": false, "pypi_artifacts": false, "artifact_safety": false, "artifact_behavior": false}}
+			"inform": {"groups": {"release_metadata": false, "name_protection": false, "npm_lifecycle": false, "npm_dependencies": false, "pypi_artifacts": false, "source_metadata": false, "artifact_safety": false, "artifact_behavior": false}},
+			"alert": {"groups": {"release_metadata": false, "name_protection": false, "npm_lifecycle": false, "npm_dependencies": false, "pypi_artifacts": false, "source_metadata": false, "artifact_safety": false, "artifact_behavior": false}},
+			"block": {"groups": {"release_metadata": false, "name_protection": false, "npm_lifecycle": false, "npm_dependencies": false, "pypi_artifacts": false, "source_metadata": false, "artifact_safety": false, "artifact_behavior": false}}
 		}
 	}`))
 	if err != nil {
@@ -421,6 +421,51 @@ func TestEvaluateWithOptionsCollectsPyPIDebugTrace(t *testing.T) {
 	fileCount := findTrace(t, pkg.DebugTrace, "pypi_release_file_count")
 	if fileCount.Status != report.DebugTraceMatch || !containsEvidence(fileCount, "historical median file count: 1") {
 		t.Fatalf("file count trace = %+v, want count comparison", fileCount)
+	}
+}
+
+func TestEvaluateAddsNPMDependencyPrivateAndSourceMetadataFindings(t *testing.T) {
+	pkg := report.PackageReport{
+		Ecosystem: "npm",
+		Registry:  "npm registry",
+		Name:      "@internal/core",
+		NPMDependencies: report.NPMDependencySet{
+			Dependencies: []string{"new-dep"},
+		},
+		NPMDependencyHistory: []report.VersionNPMDependencies{{
+			Version:           "1.0.0",
+			DependenciesKnown: true,
+			Dependencies:      report.NPMDependencySet{Dependencies: []string{"old-dep"}},
+		}},
+		NPMDirectDependencies: []report.NPMDirectDependencyInspection{{
+			Name:              "direct-dep",
+			SelectedVersion:   "1.0.0",
+			LifecycleFindings: []string{"package declares high-signal npm install lifecycle script \"postinstall\": node setup.js"},
+		}},
+		NPMSource: report.NPMSourceMetadata{},
+	}
+	cfg := config.Config{Policy: config.PolicyConfig{
+		Alert: config.PolicyTierConfig{
+			PrivatePackages: map[string][]string{
+				"npm": {"@internal/core"},
+			},
+			NPMDependencyHistoryVersions:        5,
+			NPMDependencyChange:                 true,
+			NPMDirectDependencyLifecycleScripts: true,
+			NPMGitHeadMissing:                   true,
+			NPMRepositoryMissing:                true,
+		},
+	}}
+
+	EvaluateWithOptions(&pkg, cfg, time.Now(), EvaluationOptions{Debug: true})
+
+	for _, want := range []string{"private/internal", "new-dep", "direct-dep", "gitHead", "repository"} {
+		if !hasFindingContaining(pkg.Findings, want) {
+			t.Fatalf("findings = %+v, want finding containing %q", pkg.Findings, want)
+		}
+	}
+	if trace := findTrace(t, pkg.DebugTrace, "npm_dependency_change"); trace.Status != report.DebugTraceMatch || trace.Severity != levelAlert {
+		t.Fatalf("dependency trace = %+v, want alert match", trace)
 	}
 }
 
@@ -662,6 +707,41 @@ func TestEvaluateArtifactInspectionAddsBehaviorIndicatorFinding(t *testing.T) {
 	}
 }
 
+func TestEvaluateArtifactInspectionAddsGeneralRiskAndDeltaFindings(t *testing.T) {
+	pkg := report.PackageReport{
+		Decision: report.DecisionAllow,
+		ArtifactInspection: &report.ArtifactInspectionSummary{
+			ArchiveFormat:          "tar.gz",
+			GeneralRiskSignalCount: 1,
+			GeneralRiskSignalExamples: []report.ArtifactGeneralRiskSignal{{
+				Type:   "sensitive_config_file",
+				Path:   "package/.npmrc",
+				Reason: "sensitive configuration filename",
+			}},
+		},
+		ArtifactDelta: &report.ArtifactDeltaSummary{
+			Status:            "COMPARED",
+			AddedPathCount:    1,
+			AddedPathExamples: []string{"package/new.js"},
+		},
+	}
+	cfg := config.Config{Policy: config.PolicyConfig{
+		Alert: config.PolicyTierConfig{
+			ArtifactGeneralRiskSignals: true,
+			ArtifactFileListChange:     true,
+		},
+	}}
+
+	EvaluateArtifactInspection(&pkg, cfg, EvaluationOptions{Debug: true})
+
+	if !hasFindingContaining(pkg.Findings, ".npmrc") || !hasFindingContaining(pkg.Findings, "file list changed") {
+		t.Fatalf("findings = %+v, want general risk and delta findings", pkg.Findings)
+	}
+	if trace := findTrace(t, pkg.DebugTrace, "artifact_general_risk_signals"); trace.Status != report.DebugTraceMatch {
+		t.Fatalf("general risk trace = %+v, want match", trace)
+	}
+}
+
 func TestEvaluateArtifactInspectionLeavesMetadataOnlyEvaluationUnchanged(t *testing.T) {
 	pkg := report.PackageReport{}
 	cfg := config.Config{Policy: config.PolicyConfig{
@@ -673,6 +753,15 @@ func TestEvaluateArtifactInspectionLeavesMetadataOnlyEvaluationUnchanged(t *test
 	if pkg.Decision != report.DecisionInspectOnly || len(pkg.Findings) != 0 || pkg.PolicySummary != "" {
 		t.Fatalf("pkg = %+v, want metadata-only evaluation unchanged by artifact policy", pkg)
 	}
+}
+
+func hasFindingContaining(findings []report.Finding, want string) bool {
+	for _, finding := range findings {
+		if strings.Contains(finding.Message, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasFindingWithSeverity(findings []report.Finding, severity string) bool {

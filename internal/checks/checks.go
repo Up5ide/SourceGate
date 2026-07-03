@@ -200,9 +200,29 @@ func displayOrderPolicyTiers(policy config.PolicyConfig) []policyTier {
 }
 
 func RequiredNPMHistoryVersions(policy config.PolicyConfig) int {
-	return maxTierInteger(strongestFirstPolicyTiers(policy), func(tier config.PolicyTierConfig) int {
+	tiers := strongestFirstPolicyTiers(policy)
+	required := maxTierInteger(tiers, func(tier config.PolicyTierConfig) int {
 		return tier.InstallLifecycleHistoryVersions
 	})
+	if dependencyHistory := maxTierInteger(tiers, func(tier config.PolicyTierConfig) int {
+		return tier.NPMDependencyHistoryVersions
+	}); dependencyHistory > required {
+		required = dependencyHistory
+	}
+	if sourceHistory := maxTierInteger(tiers, func(tier config.PolicyTierConfig) int {
+		if tier.NPMGitHeadChangedAfterDormancy || tier.NPMRepositoryChanged || tier.NPMPublisherChanged {
+			return 1
+		}
+		return 0
+	}); sourceHistory > required {
+		required = sourceHistory
+	}
+	if releaseBurstHistory := maxTierInteger(tiers, func(tier config.PolicyTierConfig) int {
+		return tier.NPMReleaseBurstCount
+	}); releaseBurstHistory > required {
+		required = releaseBurstHistory
+	}
+	return required
 }
 
 func RequiredPyPIArtifactHistoryVersions(policy config.PolicyConfig) int {
@@ -215,6 +235,35 @@ func RequiresPyPIDependencyHistory(policy config.PolicyConfig) bool {
 	return anyTier(strongestFirstPolicyTiers(policy), func(tier config.PolicyTierConfig) bool {
 		return tier.PyPIDependencyChange
 	})
+}
+
+func RequiresNPMDirectDependencyInspection(policy config.PolicyConfig) bool {
+	return anyTier(strongestFirstPolicyTiers(policy), func(tier config.PolicyTierConfig) bool {
+		return tier.NPMDirectDependencyLifecycleScripts || tier.NPMDirectDependencySuspiciousInstallCommands
+	})
+}
+
+func MaxNPMDirectDependencies(policy config.PolicyConfig) int {
+	maximum := maxTierInteger(strongestFirstPolicyTiers(policy), func(tier config.PolicyTierConfig) int {
+		return tier.NPMMaxDirectDependencies
+	})
+	if maximum <= 0 {
+		return 25
+	}
+	return maximum
+}
+
+func RequiresArtifactDelta(policy config.PolicyConfig) bool {
+	return anyTier(strongestFirstPolicyTiers(policy), func(tier config.PolicyTierConfig) bool {
+		return tier.ArtifactFileListChange ||
+			tier.ArtifactNewExecutionSurfaces ||
+			tier.ArtifactNewSuspiciousFileTypes ||
+			tier.ArtifactSizeDelta
+	})
+}
+
+func ArtifactPolicyEnabled(policy config.PolicyConfig) bool {
+	return phasePolicyEnabled(strongestFirstPolicyTiers(policy), policyDefinitionsForPhase(phaseArtifact))
 }
 
 func RequiredPyPIProvenanceScopes(policy config.PolicyConfig) []string {
@@ -257,6 +306,10 @@ func hasProtectedPackagePolicy(policy config.PolicyTierConfig) bool {
 
 func hasProtectedTokenPolicy(policy config.PolicyTierConfig) bool {
 	return len(policy.ProtectedTokens) > 0
+}
+
+func hasPrivatePackagePolicy(policy config.PolicyTierConfig) bool {
+	return len(policy.PrivatePackages) > 0
 }
 
 func firstMatchingTierFinding(tiers []policyTier, check func(config.PolicyTierConfig) []report.Finding) []report.Finding {

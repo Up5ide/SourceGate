@@ -167,6 +167,26 @@ func TestParseInstallCommandJSONFormat(t *testing.T) {
 	}
 }
 
+func TestParseInstallCommandReportFormat(t *testing.T) {
+	req, err := ParseInstallCommand([]string{"--format", "report", "npm", "install", "lodash"})
+	if err != nil {
+		t.Fatalf("ParseInstallCommand returned error: %v", err)
+	}
+	if req.OutputFormat != OutputFormatReport || req.ReportVerbose {
+		t.Fatalf("request = %+v, want report format without verbose", req)
+	}
+}
+
+func TestParseInstallCommandReportVerbose(t *testing.T) {
+	req, err := ParseInstallCommand([]string{"--format", "report", "-v", "npm", "install", "lodash"})
+	if err != nil {
+		t.Fatalf("ParseInstallCommand returned error: %v", err)
+	}
+	if req.OutputFormat != OutputFormatReport || !req.ReportVerbose {
+		t.Fatalf("request = %+v, want verbose report format", req)
+	}
+}
+
 func TestParseInstallCommandPyPIRuntimeOptions(t *testing.T) {
 	req, err := ParseInstallCommand([]string{
 		"--abi", "cp311",
@@ -213,6 +233,12 @@ func TestParseInstallCommandRejectsUnsupportedShapes(t *testing.T) {
 		{"--format", "xml", "npm", "install", "lodash"},
 		{"--format", "json", "--format", "human", "npm", "install", "lodash"},
 		{"--format", "npm", "install", "lodash"},
+		{"-v", "npm", "install", "lodash"},
+		{"--format", "json", "-v", "npm", "install", "lodash"},
+		{"--format", "report", "-v", "-v", "npm", "install", "lodash"},
+		{"--debug", "--format", "report", "npm", "install", "lodash"},
+		{"--format", "report", "--debug", "npm", "install", "lodash"},
+		{"-x", "npm", "install", "lodash"},
 		{"--verbose", "npm", "install", "lodash"},
 		{"--python", "py", "npm", "install", "lodash"},
 		{"--target-platform", "win_amd64", "npm", "install", "lodash"},

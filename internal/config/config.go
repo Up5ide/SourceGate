@@ -19,7 +19,9 @@ const (
 	GroupReleaseMetadata  = "release_metadata"
 	GroupNameProtection   = "name_protection"
 	GroupNPMLifecycle     = "npm_lifecycle"
+	GroupNPMDependencies  = "npm_dependencies"
 	GroupPyPIArtifacts    = "pypi_artifacts"
+	GroupSourceMetadata   = "source_metadata"
 	GroupArtifactSafety   = "artifact_safety"
 	GroupArtifactBehavior = "artifact_behavior"
 )
@@ -28,7 +30,9 @@ var supportedPolicyGroups = []string{
 	GroupReleaseMetadata,
 	GroupNameProtection,
 	GroupNPMLifecycle,
+	GroupNPMDependencies,
 	GroupPyPIArtifacts,
+	GroupSourceMetadata,
 	GroupArtifactSafety,
 	GroupArtifactBehavior,
 }
@@ -52,30 +56,48 @@ type PolicyConfig struct {
 }
 
 type PolicyTierConfig struct {
-	MinimumDaysSinceLatestRelease   int                 `json:"minimum_days_since_latest_release"`
-	DormantReleaseThresholdDays     int                 `json:"dormant_release_threshold_days"`
-	AlertOnFirstRelease             bool                `json:"alert_on_first_release"`
-	InstallLifecycleScripts         bool                `json:"install_lifecycle_scripts"`
-	InstallLifecycleHistoryVersions int                 `json:"install_lifecycle_history_versions"`
-	SuspiciousInstallScriptCommands bool                `json:"suspicious_install_script_commands"`
-	InstallScriptAddedAfterDormancy bool                `json:"install_script_added_after_dormancy"`
-	PyPIArtifactHistoryVersions     int                 `json:"pypi_artifact_history_versions"`
-	PyPIArtifactShapeChange         bool                `json:"pypi_artifact_shape_change"`
-	PyPIFileSizeJumpPercent         int                 `json:"pypi_file_size_jump_percent"`
-	PyPIDependencyChange            bool                `json:"pypi_dependency_change"`
-	PyPIProvenanceRequired          bool                `json:"pypi_provenance_required"`
-	PyPIProvenanceScope             string              `json:"pypi_provenance_scope"`
-	PyPIIncludeOptionalDependencies bool                `json:"pypi_include_optional_dependencies"`
-	PyPIReleaseFileCountChange      bool                `json:"pypi_release_file_count_change"`
-	ArtifactUnsafePaths             bool                `json:"artifact_unsafe_paths"`
-	ArtifactMaxFileCount            int                 `json:"artifact_max_file_count"`
-	ArtifactMaxUncompressedSizeMB   int                 `json:"artifact_max_uncompressed_size_mb"`
-	ArtifactMaxExpansionRatio       int                 `json:"artifact_max_expansion_ratio"`
-	ArtifactExecutionSurfaces       bool                `json:"artifact_execution_surfaces"`
-	ArtifactSuspiciousFileTypes     bool                `json:"artifact_suspicious_file_types"`
-	ArtifactBehaviorIndicators      bool                `json:"artifact_behavior_indicators"`
-	ProtectedPackages               map[string][]string `json:"protected_packages"`
-	ProtectedTokens                 map[string][]string `json:"protected_tokens"`
+	MinimumDaysSinceLatestRelease                int                 `json:"minimum_days_since_latest_release"`
+	DormantReleaseThresholdDays                  int                 `json:"dormant_release_threshold_days"`
+	AlertOnFirstRelease                          bool                `json:"alert_on_first_release"`
+	InstallLifecycleScripts                      bool                `json:"install_lifecycle_scripts"`
+	InstallLifecycleHistoryVersions              int                 `json:"install_lifecycle_history_versions"`
+	SuspiciousInstallScriptCommands              bool                `json:"suspicious_install_script_commands"`
+	InstallScriptAddedAfterDormancy              bool                `json:"install_script_added_after_dormancy"`
+	NPMDependencyHistoryVersions                 int                 `json:"npm_dependency_history_versions"`
+	NPMDependencyChange                          bool                `json:"npm_dependency_change"`
+	NPMDirectDependencyLifecycleScripts          bool                `json:"npm_direct_dependency_lifecycle_scripts"`
+	NPMDirectDependencySuspiciousInstallCommands bool                `json:"npm_direct_dependency_suspicious_install_commands"`
+	NPMMaxDirectDependencies                     int                 `json:"npm_max_direct_dependencies"`
+	PyPIArtifactHistoryVersions                  int                 `json:"pypi_artifact_history_versions"`
+	PyPIArtifactShapeChange                      bool                `json:"pypi_artifact_shape_change"`
+	PyPIFileSizeJumpPercent                      int                 `json:"pypi_file_size_jump_percent"`
+	PyPIDependencyChange                         bool                `json:"pypi_dependency_change"`
+	PyPIProvenanceRequired                       bool                `json:"pypi_provenance_required"`
+	PyPIProvenanceScope                          string              `json:"pypi_provenance_scope"`
+	PyPIIncludeOptionalDependencies              bool                `json:"pypi_include_optional_dependencies"`
+	PyPIReleaseFileCountChange                   bool                `json:"pypi_release_file_count_change"`
+	ArtifactUnsafePaths                          bool                `json:"artifact_unsafe_paths"`
+	ArtifactMaxFileCount                         int                 `json:"artifact_max_file_count"`
+	ArtifactMaxUncompressedSizeMB                int                 `json:"artifact_max_uncompressed_size_mb"`
+	ArtifactMaxExpansionRatio                    int                 `json:"artifact_max_expansion_ratio"`
+	ArtifactExecutionSurfaces                    bool                `json:"artifact_execution_surfaces"`
+	ArtifactSuspiciousFileTypes                  bool                `json:"artifact_suspicious_file_types"`
+	ArtifactBehaviorIndicators                   bool                `json:"artifact_behavior_indicators"`
+	ArtifactGeneralRiskSignals                   bool                `json:"artifact_general_risk_signals"`
+	ArtifactFileListChange                       bool                `json:"artifact_file_list_change"`
+	ArtifactNewExecutionSurfaces                 bool                `json:"artifact_new_execution_surfaces"`
+	ArtifactNewSuspiciousFileTypes               bool                `json:"artifact_new_suspicious_file_types"`
+	ArtifactSizeDelta                            bool                `json:"artifact_size_delta"`
+	ProtectedPackages                            map[string][]string `json:"protected_packages"`
+	ProtectedTokens                              map[string][]string `json:"protected_tokens"`
+	PrivatePackages                              map[string][]string `json:"private_packages"`
+	NPMGitHeadMissing                            bool                `json:"npm_git_head_missing"`
+	NPMRepositoryMissing                         bool                `json:"npm_repository_missing"`
+	NPMGitHeadChangedAfterDormancy               bool                `json:"npm_git_head_changed_after_dormancy"`
+	NPMRepositoryChanged                         bool                `json:"npm_repository_changed"`
+	NPMPublisherChanged                          bool                `json:"npm_publisher_changed"`
+	NPMReleaseBurstCount                         int                 `json:"npm_release_burst_count"`
+	NPMReleaseBurstWindowHours                   int                 `json:"npm_release_burst_window_hours"`
 }
 
 type rawConfig struct {
@@ -253,6 +275,14 @@ func applyGroupDefaults(tier, group string, policy *PolicyTierConfig) {
 		case "block":
 			policy.SuspiciousInstallScriptCommands = true
 		}
+	case GroupNPMDependencies:
+		if tier == "alert" {
+			policy.NPMDependencyHistoryVersions = 5
+			policy.NPMDependencyChange = true
+			policy.NPMDirectDependencyLifecycleScripts = true
+			policy.NPMDirectDependencySuspiciousInstallCommands = true
+			policy.NPMMaxDirectDependencies = 25
+		}
 	case GroupPyPIArtifacts:
 		if tier == "alert" {
 			policy.PyPIArtifactHistoryVersions = 5
@@ -262,6 +292,16 @@ func applyGroupDefaults(tier, group string, policy *PolicyTierConfig) {
 			policy.PyPIProvenanceRequired = true
 			policy.PyPIProvenanceScope = "install-target"
 			policy.PyPIReleaseFileCountChange = true
+		}
+	case GroupSourceMetadata:
+		if tier == "alert" {
+			policy.NPMGitHeadMissing = true
+			policy.NPMRepositoryMissing = true
+			policy.NPMGitHeadChangedAfterDormancy = policy.DormantReleaseThresholdDays > 0
+			policy.NPMRepositoryChanged = true
+			policy.NPMPublisherChanged = true
+			policy.NPMReleaseBurstCount = 3
+			policy.NPMReleaseBurstWindowHours = 2
 		}
 	case GroupArtifactSafety:
 		if tier == "block" {
@@ -275,6 +315,11 @@ func applyGroupDefaults(tier, group string, policy *PolicyTierConfig) {
 			policy.ArtifactExecutionSurfaces = true
 			policy.ArtifactSuspiciousFileTypes = true
 			policy.ArtifactBehaviorIndicators = true
+			policy.ArtifactGeneralRiskSignals = true
+			policy.ArtifactFileListChange = true
+			policy.ArtifactNewExecutionSurfaces = true
+			policy.ArtifactNewSuspiciousFileTypes = true
+			policy.ArtifactSizeDelta = true
 		}
 	}
 }
@@ -306,6 +351,16 @@ func applyCheckOverride(tier, check string, raw json.RawMessage, policy *PolicyT
 		policy.SuspiciousInstallScriptCommands, err = boolValue(field, raw)
 	case "install_script_added_after_dormancy":
 		policy.InstallScriptAddedAfterDormancy, err = boolValue(field, raw)
+	case "npm_dependency_history_versions":
+		policy.NPMDependencyHistoryVersions, err = intOrFalse(field, raw)
+	case "npm_dependency_change":
+		policy.NPMDependencyChange, err = boolValue(field, raw)
+	case "npm_direct_dependency_lifecycle_scripts":
+		policy.NPMDirectDependencyLifecycleScripts, err = boolValue(field, raw)
+	case "npm_direct_dependency_suspicious_install_commands":
+		policy.NPMDirectDependencySuspiciousInstallCommands, err = boolValue(field, raw)
+	case "npm_max_direct_dependencies":
+		policy.NPMMaxDirectDependencies, err = intOrFalse(field, raw)
 	case "pypi_artifact_history_versions":
 		policy.PyPIArtifactHistoryVersions, err = intOrFalse(field, raw)
 	case "pypi_artifact_shape_change":
@@ -336,10 +391,36 @@ func applyCheckOverride(tier, check string, raw json.RawMessage, policy *PolicyT
 		policy.ArtifactSuspiciousFileTypes, err = boolValue(field, raw)
 	case "artifact_behavior_indicators":
 		policy.ArtifactBehaviorIndicators, err = boolValue(field, raw)
+	case "artifact_general_risk_signals":
+		policy.ArtifactGeneralRiskSignals, err = boolValue(field, raw)
+	case "artifact_file_list_change":
+		policy.ArtifactFileListChange, err = boolValue(field, raw)
+	case "artifact_new_execution_surfaces":
+		policy.ArtifactNewExecutionSurfaces, err = boolValue(field, raw)
+	case "artifact_new_suspicious_file_types":
+		policy.ArtifactNewSuspiciousFileTypes, err = boolValue(field, raw)
+	case "artifact_size_delta":
+		policy.ArtifactSizeDelta, err = boolValue(field, raw)
 	case "protected_packages":
 		policy.ProtectedPackages, err = ecosystemListMapOrFalse(field, raw)
 	case "protected_tokens":
 		policy.ProtectedTokens, err = ecosystemListMapOrFalse(field, raw)
+	case "private_packages":
+		policy.PrivatePackages, err = ecosystemListMapOrFalse(field, raw)
+	case "npm_git_head_missing":
+		policy.NPMGitHeadMissing, err = boolValue(field, raw)
+	case "npm_repository_missing":
+		policy.NPMRepositoryMissing, err = boolValue(field, raw)
+	case "npm_git_head_changed_after_dormancy":
+		policy.NPMGitHeadChangedAfterDormancy, err = boolValue(field, raw)
+	case "npm_repository_changed":
+		policy.NPMRepositoryChanged, err = boolValue(field, raw)
+	case "npm_publisher_changed":
+		policy.NPMPublisherChanged, err = boolValue(field, raw)
+	case "npm_release_burst_count":
+		policy.NPMReleaseBurstCount, err = intOrFalse(field, raw)
+	case "npm_release_burst_window_hours":
+		policy.NPMReleaseBurstWindowHours, err = intOrFalse(field, raw)
 	default:
 		return fmt.Errorf("policy.%s.checks contains unsupported check %q", tier, check)
 	}
@@ -419,6 +500,12 @@ func validatePolicyTier(tier string, policy PolicyTierConfig) error {
 	if policy.InstallLifecycleHistoryVersions < 0 {
 		return fmt.Errorf("policy.%s.install_lifecycle_history_versions cannot be negative", tier)
 	}
+	if policy.NPMDependencyHistoryVersions < 0 {
+		return fmt.Errorf("policy.%s.npm_dependency_history_versions cannot be negative", tier)
+	}
+	if policy.NPMMaxDirectDependencies < 0 {
+		return fmt.Errorf("policy.%s.npm_max_direct_dependencies cannot be negative", tier)
+	}
 	if policy.PyPIArtifactHistoryVersions < 0 {
 		return fmt.Errorf("policy.%s.pypi_artifact_history_versions cannot be negative", tier)
 	}
@@ -434,6 +521,12 @@ func validatePolicyTier(tier string, policy PolicyTierConfig) error {
 	if policy.ArtifactMaxExpansionRatio < 0 {
 		return fmt.Errorf("policy.%s.artifact_max_expansion_ratio cannot be negative", tier)
 	}
+	if policy.NPMReleaseBurstCount < 0 {
+		return fmt.Errorf("policy.%s.npm_release_burst_count cannot be negative", tier)
+	}
+	if policy.NPMReleaseBurstWindowHours < 0 {
+		return fmt.Errorf("policy.%s.npm_release_burst_window_hours cannot be negative", tier)
+	}
 	if policy.InstallScriptAddedAfterDormancy {
 		if policy.InstallLifecycleHistoryVersions <= 0 {
 			return fmt.Errorf("policy.%s.install_lifecycle_history_versions must be configured when install_script_added_after_dormancy is true", tier)
@@ -441,6 +534,20 @@ func validatePolicyTier(tier string, policy PolicyTierConfig) error {
 		if policy.DormantReleaseThresholdDays <= 0 {
 			return fmt.Errorf("policy.%s.dormant_release_threshold_days must be configured when install_script_added_after_dormancy is true", tier)
 		}
+	}
+	npmDependencyHistoryEnabled := policy.NPMDependencyChange
+	if npmDependencyHistoryEnabled && policy.NPMDependencyHistoryVersions <= 0 {
+		return fmt.Errorf("policy.%s.npm_dependency_history_versions must be configured when npm_dependency_change is true", tier)
+	}
+	if policy.NPMDependencyHistoryVersions > 0 && !npmDependencyHistoryEnabled {
+		return fmt.Errorf("policy.%s.npm_dependency_history_versions must be disabled when no history-dependent npm dependency check is enabled", tier)
+	}
+	npmDirectDependencyEnabled := policy.NPMDirectDependencyLifecycleScripts || policy.NPMDirectDependencySuspiciousInstallCommands
+	if npmDirectDependencyEnabled && policy.NPMMaxDirectDependencies <= 0 {
+		return fmt.Errorf("policy.%s.npm_max_direct_dependencies must be configured when direct npm dependency inspection is enabled", tier)
+	}
+	if policy.NPMMaxDirectDependencies > 0 && !npmDirectDependencyEnabled {
+		return fmt.Errorf("policy.%s.npm_max_direct_dependencies must be disabled when direct npm dependency inspection is disabled", tier)
 	}
 	if policy.PyPIIncludeOptionalDependencies && !policy.PyPIDependencyChange {
 		return fmt.Errorf("policy.%s.pypi_dependency_change must be true when pypi_include_optional_dependencies is true", tier)
@@ -463,6 +570,16 @@ func validatePolicyTier(tier string, policy PolicyTierConfig) error {
 	}
 	if err := validateEcosystemListMap("policy."+tier+".protected_tokens", policy.ProtectedTokens); err != nil {
 		return err
+	}
+	if err := validateEcosystemListMap("policy."+tier+".private_packages", policy.PrivatePackages); err != nil {
+		return err
+	}
+	if policy.NPMGitHeadChangedAfterDormancy && policy.DormantReleaseThresholdDays <= 0 {
+		return fmt.Errorf("policy.%s.dormant_release_threshold_days must be configured when npm_git_head_changed_after_dormancy is true", tier)
+	}
+	releaseBurstEnabled := policy.NPMReleaseBurstCount > 0 || policy.NPMReleaseBurstWindowHours > 0
+	if releaseBurstEnabled && (policy.NPMReleaseBurstCount <= 0 || policy.NPMReleaseBurstWindowHours <= 0) {
+		return fmt.Errorf("policy.%s.npm_release_burst_count and npm_release_burst_window_hours must both be configured for release burst checks", tier)
 	}
 	return nil
 }
