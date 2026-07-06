@@ -138,3 +138,35 @@ func TestRenderHumanIncludesArtifactDownloadSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderHumanIncludesInstallSummary(t *testing.T) {
+	exitCode := 0
+	var buf bytes.Buffer
+	RenderHuman(&buf, report.PackageReport{
+		Name: "lodash",
+		Install: &report.InstallSummary{
+			Status:                 report.InstallStatusExecutedSuccess,
+			Executed:               true,
+			Manager:                "npm",
+			PackageSpec:            "lodash@4.17.21",
+			PackageManagerExitCode: &exitCode,
+			DurationMilliseconds:   123,
+			Message:                "package-manager install completed successfully",
+		},
+	})
+
+	for _, want := range []string{
+		"Install Summary:",
+		"Status: EXECUTED_SUCCESS",
+		"Executed: yes",
+		"Manager: npm",
+		"Package: lodash@4.17.21",
+		"Package Manager Exit Code: 0",
+		"Duration: 123 ms",
+		"Install executed: yes",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, buf.String())
+		}
+	}
+}

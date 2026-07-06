@@ -1,0 +1,19 @@
+---
+description: Route npm and PyPI installs through SourceGate.
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# SourceGate Package Installs
+
+Use SourceGate for npm and PyPI package installs.
+
+- Use `sourcegate --mode install npm install <package>` instead of `npm install <package>`.
+- Use `sourcegate --mode install npm install <package>@<version>` instead of `npm install <package>@<version>`.
+- Use `sourcegate --mode install pip install <package>` instead of `pip install <package>`.
+- Use `sourcegate --mode install pip install <package>==<version>` instead of `pip install <package>==<version>`.
+- If SourceGate returns `BLOCK` or exit code `30`, stop and do not install the package another way.
+- If SourceGate returns `ALERT` or `INFORM`, report the findings to the user.
+- If SourceGate is unavailable or rejects the install shape, ask the user before using direct `npm` or `pip`.
+- Do not bypass SourceGate with alternate registries, direct artifact URLs, package-manager flags, or direct package-manager commands unless the user explicitly approves.

@@ -16,7 +16,12 @@ Supported command shape:
 sourcegate --help
 sourcegate --version
 sourcegate --print-config
+sourcegate config test
+sourcegate config explain
+sourcegate config preset balanced
+sourcegate config preset strict --format full
 sourcegate --config ./strict.json --print-config
+sourcegate --preset balanced npm install <package>
 sourcegate [--config <path>] [--mode metadata|artifact|install] npm install <package>
 sourcegate [--config <path>] [--mode metadata|artifact|install] npm install <package>@<version>
 sourcegate [--config <path>] [--mode metadata|artifact|install] pip install <package>
@@ -73,7 +78,8 @@ Supported behavior:
 - Identify the target ecosystem.
 - Extract the requested package name and optional exact version.
 - Query the relevant public registry.
-- Read grouped policy from either relaxed file config or strict embedded config. Relaxed builds read `sourcegate.config.json` by default and support `--config <path>`; embedded builds use the compiled-in config and reject external config paths.
+- Read override-only grouped policy from relaxed file config, explicit presets, or strict embedded config. Relaxed builds read `sourcegate.config.json` by default and support `--config <path>`; `--preset minimal|balanced|strict` uses a hard-coded preset for one run; embedded builds use the compiled-in config and reject external config paths.
+- Validate and explain configuration with `sourcegate config test`, `sourcegate config explain`, and `sourcegate config preset <name>`.
 - Print CLI help, version/build/config-mode information, and JSON config status with `--help`, `--version`, and `--print-config`.
 - Emit tiered policy findings for release timing, package history, package names, npm lifecycle metadata, npm dependency/source/publisher metadata, private package public-registry matches, and PyPI artifact/provenance metadata.
 - Emit human-readable output, full structured JSON, or a compact deterministic report JSON.
@@ -91,6 +97,7 @@ The current version does not extract package contents, scan source code broadly,
 ## Documentation
 
 - [Configuration](docs/configuration.md)
+- [Configuration Questionnaire](docs/config-questionnaire.md)
 - [Design](docs/design.md)
 - [Attack Vectors](docs/attack-vectors.md)
 - [Live Registry Smoke Test](docs/live-registry-smoke-test.md)

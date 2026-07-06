@@ -27,6 +27,7 @@ import (
 	"github.com/sourcegate/sourcegate/internal/ecosystem"
 	"github.com/sourcegate/sourcegate/internal/ecosystem/npm"
 	"github.com/sourcegate/sourcegate/internal/ecosystem/pypi"
+	pkginstaller "github.com/sourcegate/sourcegate/internal/installer"
 	"github.com/sourcegate/sourcegate/internal/report"
 )
 
@@ -59,9 +60,12 @@ func TestRunInfoCommandsDoNotRequirePackageManagerOrRegistry(t *testing.T) {
 		args []string
 		want string
 	}{
-		"help":         {args: []string{"--help"}, want: "--mode metadata"},
-		"version":      {args: []string{"--version"}, want: "SourceGate version: 0.8.2"},
-		"print config": {args: []string{"--print-config"}, want: `"config_mode"`},
+		"help":           {args: []string{"--help"}, want: "--mode metadata"},
+		"version":        {args: []string{"--version"}, want: "SourceGate version: 0.9.0"},
+		"print config":   {args: []string{"--print-config"}, want: `"config_mode"`},
+		"config test":    {args: []string{"config", "test"}, want: "Config valid."},
+		"config explain": {args: []string{"config", "explain"}, want: "SourceGate configuration"},
+		"config preset":  {args: []string{"config", "preset", "balanced"}, want: `"policy"`},
 	}
 
 	for name, tc := range cases {
@@ -111,7 +115,7 @@ func TestRunPrintConfigReportsRelaxedCustomConfig(t *testing.T) {
 
 func TestRunPrintConfigReportsInvalidRelaxedConfig(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "broken.json")
-	if err := os.WriteFile(configPath, []byte(`{}`), 0600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"policy":{"alert":{"unknown":true}}}`), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -126,6 +130,41 @@ func TestRunPrintConfigReportsInvalidRelaxedConfig(t *testing.T) {
 	}
 	if result.ExitCode != ExitClean || !status.Exists || status.Valid || status.Error == "" {
 		t.Fatalf("exit = %d status = %+v, want invalid config status", result.ExitCode, status)
+	}
+}
+
+func TestRunPrintConfigReportsPresetConfig(t *testing.T) {
+	var out bytes.Buffer
+	result, err := New(&http.Client{}, &out, &bytes.Buffer{}).Run(context.Background(), []string{"--preset", "balanced", "--print-config"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitClean {
+		t.Fatalf("exit code = %d, want clean", result.ExitCode)
+	}
+	var status configsource.Status
+	if err := json.Unmarshal(out.Bytes(), &status); err != nil {
+		t.Fatalf("stdout is not config status JSON: %v\n%s", err, out.String())
+	}
+	if status.Preset != "balanced" || !status.Valid || status.Config == nil || status.Config.Policy.Alert.MinimumDaysSinceLatestRelease == 0 {
+		t.Fatalf("status = %+v, want valid balanced preset status", status)
+	}
+}
+
+func TestRunConfigTestReportsInvalidConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "broken.json")
+	if err := os.WriteFile(configPath, []byte(`{"policy":{"alert":{"checks":{"minimum_days_since_latest_release":-1}}}}`), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	result, err := newFileConfigApp(&http.Client{}, &out, &errOut).Run(context.Background(), []string{"config", "test", "--config", configPath})
+	if err == nil {
+		t.Fatalf("Run returned nil error")
+	}
+	if result.ExitCode != ExitOperationalError || !strings.Contains(errOut.String(), "Config invalid") {
+		t.Fatalf("exit = %d stdout = %q stderr = %q, want invalid config test", result.ExitCode, out.String(), errOut.String())
 	}
 }
 
@@ -149,17 +188,282 @@ func TestRunRejectsExternalConfigWhenConfigSourceIsEmbedded(t *testing.T) {
 	}
 }
 
-func TestRunModeInstallReturnsReservedError(t *testing.T) {
-	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
-		t.Fatalf("unexpected registry request")
-		return nil, nil
-	})}
-	result, err := newStaticConfigApp(client, &bytes.Buffer{}, &bytes.Buffer{}, config.Config{}).Run(context.Background(), []string{"--mode", "install", "npm", "install", "lodash"})
-	if err == nil {
-		t.Fatalf("Run returned nil error")
+func TestRunUsesExplicitPresetForPackageEvaluation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/pkg" {
+			t.Fatalf("path = %q, want /pkg", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"name": "pkg",
+			"dist-tags": {"latest": "1.0.0"},
+			"time": {"1.0.0": "2021-02-20T15:42:16.891Z"},
+			"versions": {"1.0.0": {}}
+		}`))
+	}))
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	var out bytes.Buffer
+	result, err := New(server.Client(), &out, &bytes.Buffer{}).Run(context.Background(), []string{"--preset", "balanced", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
 	}
-	if result.ExitCode != ExitOperationalError || !strings.Contains(err.Error(), "reserved for SourceGate 1.0") {
-		t.Fatalf("exit = %d error = %v, want reserved install-mode error", result.ExitCode, err)
+	if result.ExitCode != ExitAlertFinding || !hasFindingContaining(result.Report.Findings, "first-release package") {
+		t.Fatalf("exit = %d findings = %+v, want balanced preset first-release alert", result.ExitCode, result.Report.Findings)
+	}
+}
+
+func TestRunModeInstallInspectsArtifactAndRunsExactSelectedPackage(t *testing.T) {
+	content := testTarGzip(t, "package/index.js", []byte("npm artifact"))
+	server, artifactRequests := newNPMArtifactServer(t, "lodash", "4.17.21", "2021-02-20T15:42:16.891Z", content)
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	fake := &fakeInstallRunner{}
+	var out bytes.Buffer
+	app := newStaticConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &out, &bytes.Buffer{}, config.Config{})
+	app.installer = fake
+
+	result, err := app.Run(context.Background(), []string{"--mode", "install", "npm", "install", "lodash"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitClean {
+		t.Fatalf("exit code = %d, want clean", result.ExitCode)
+	}
+	if *artifactRequests != 1 || result.Report.ArtifactInspection == nil {
+		t.Fatalf("artifact requests = %d inspection = %+v, want install-mode artifact inspection", *artifactRequests, result.Report.ArtifactInspection)
+	}
+	if len(fake.calls) != 1 {
+		t.Fatalf("install calls = %d, want one", len(fake.calls))
+	}
+	call := fake.calls[0]
+	if call.PackageName != "lodash" || call.SelectedVersion != "4.17.21" {
+		t.Fatalf("install call = %+v, want selected exact package", call)
+	}
+	if result.Report.Install == nil || result.Report.Install.Status != report.InstallStatusExecutedSuccess || result.Report.Install.PackageSpec != "lodash@4.17.21" {
+		t.Fatalf("install summary = %+v, want successful exact install", result.Report.Install)
+	}
+	if !strings.Contains(out.String(), "Install Summary:") || !strings.Contains(out.String(), "Install executed: yes") {
+		t.Fatalf("output missing install summary:\n%s", out.String())
+	}
+	if len(result.Report.Warnings) != 1 || !strings.Contains(result.Report.Warnings[0], "transitive dependencies") {
+		t.Fatalf("warnings = %v, want transitive dependency warning", result.Report.Warnings)
+	}
+}
+
+func TestRunModeInstallPreservesInformAndAlertExitCodes(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  config.Config
+		want int
+	}{
+		{
+			name: "inform",
+			cfg: config.Config{Policy: config.PolicyConfig{
+				Inform: config.PolicyTierConfig{PrivatePackages: map[string][]string{"npm": {"pkg"}}},
+			}},
+			want: ExitInformFinding,
+		},
+		{
+			name: "alert",
+			cfg: config.Config{Policy: config.PolicyConfig{
+				Alert: config.PolicyTierConfig{PrivatePackages: map[string][]string{"npm": {"pkg"}}},
+			}},
+			want: ExitAlertFinding,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			content := testTarGzip(t, "package/index.js", []byte("npm artifact"))
+			server, _ := newNPMArtifactServer(t, "pkg", "1.0.0", "2021-02-20T15:42:16.891Z", content)
+			defer server.Close()
+
+			oldBase := npm.RegistryBaseURL
+			npm.RegistryBaseURL = server.URL
+			defer func() { npm.RegistryBaseURL = oldBase }()
+
+			fake := &fakeInstallRunner{}
+			app := newStaticConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}, tc.cfg)
+			app.installer = fake
+
+			result, err := app.Run(context.Background(), []string{"--mode", "install", "npm", "install", "pkg"})
+			if err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			if result.ExitCode != tc.want || len(fake.calls) != 1 || result.Report.Install == nil || !result.Report.Install.Executed {
+				t.Fatalf("exit = %d calls = %d install = %+v, want exit %d and executed install", result.ExitCode, len(fake.calls), result.Report.Install, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunModeInstallSkipsInstallerWhenMetadataBlocks(t *testing.T) {
+	content := testTarGzip(t, "package/index.js", []byte("npm artifact"))
+	server, artifactRequests := newNPMArtifactServer(t, "pkg", "1.0.0", "2026-01-01T00:00:00Z", content)
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	fake := &fakeInstallRunner{}
+	app := newStaticConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}, config.Config{
+		Policy: config.PolicyConfig{Block: config.PolicyTierConfig{PrivatePackages: map[string][]string{"npm": {"pkg"}}}},
+	})
+	app.installer = fake
+
+	result, err := app.Run(context.Background(), []string{"--mode", "install", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitBlockFinding || *artifactRequests != 0 || len(fake.calls) != 0 {
+		t.Fatalf("exit = %d artifact requests = %d calls = %d, want metadata block skip", result.ExitCode, *artifactRequests, len(fake.calls))
+	}
+	if result.Report.ArtifactDownload == nil || result.Report.ArtifactDownload.Status != report.ArtifactDownloadStatusSkippedBlocked {
+		t.Fatalf("artifact download = %+v, want skipped blocked", result.Report.ArtifactDownload)
+	}
+	if result.Report.Install == nil || result.Report.Install.Status != report.InstallStatusSkippedBlocked || result.Report.Install.Executed {
+		t.Fatalf("install summary = %+v, want skipped blocked", result.Report.Install)
+	}
+}
+
+func TestRunModeInstallSkipsInstallerWhenArtifactBlocks(t *testing.T) {
+	content := testTarGzip(t, "package/package.json", []byte(`{"scripts":{"postinstall":"node setup.js"}}`))
+	server, artifactRequests := newNPMArtifactServer(t, "pkg", "1.0.0", "2021-02-20T15:42:16.891Z", content)
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	fake := &fakeInstallRunner{}
+	app := newStaticConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &bytes.Buffer{}, &bytes.Buffer{}, config.Config{
+		Policy: config.PolicyConfig{Block: config.PolicyTierConfig{ArtifactExecutionSurfaces: true}},
+	})
+	app.installer = fake
+
+	result, err := app.Run(context.Background(), []string{"--mode", "install", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitBlockFinding || *artifactRequests != 1 || len(fake.calls) != 0 {
+		t.Fatalf("exit = %d artifact requests = %d calls = %d, want artifact block skip", result.ExitCode, *artifactRequests, len(fake.calls))
+	}
+	if result.Report.Install == nil || result.Report.Install.Status != report.InstallStatusSkippedBlocked {
+		t.Fatalf("install summary = %+v, want skipped blocked", result.Report.Install)
+	}
+	if !hasFindingContaining(result.Report.Findings, "postinstall") {
+		t.Fatalf("findings = %+v, want artifact execution finding", result.Report.Findings)
+	}
+}
+
+func TestRunModeInstallReturnsOperationalExitWhenInstallerFails(t *testing.T) {
+	content := testTarGzip(t, "package/index.js", []byte("npm artifact"))
+	server, _ := newNPMArtifactServer(t, "pkg", "1.0.0", "2021-02-20T15:42:16.891Z", content)
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	exitCode := 1
+	fake := &fakeInstallRunner{summary: report.InstallSummary{
+		Status:                 report.InstallStatusExecutedFailed,
+		Executed:               true,
+		PackageManagerExitCode: &exitCode,
+		Message:                "install failed",
+	}}
+	var out bytes.Buffer
+	app := newStaticConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &out, &bytes.Buffer{}, config.Config{})
+	app.installer = fake
+
+	result, err := app.Run(context.Background(), []string{"--mode", "install", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitOperationalError || result.Report.Install == nil || result.Report.Install.Status != report.InstallStatusExecutedFailed {
+		t.Fatalf("exit = %d install = %+v, want operational failed install", result.ExitCode, result.Report.Install)
+	}
+	if !strings.Contains(out.String(), "Status: EXECUTED_FAILED") || !strings.Contains(out.String(), "install failed") {
+		t.Fatalf("output missing failed install summary:\n%s", out.String())
+	}
+}
+
+func TestRunModeInstallRendersJSONInstallSummary(t *testing.T) {
+	content := testTarGzip(t, "package/index.js", []byte("npm artifact"))
+	server, _ := newNPMArtifactServer(t, "pkg", "1.0.0", "2021-02-20T15:42:16.891Z", content)
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	var out bytes.Buffer
+	fake := &fakeInstallRunner{}
+	app := newStaticConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &out, &bytes.Buffer{}, config.Config{})
+	app.installer = fake
+
+	result, err := app.Run(context.Background(), []string{"--format", "json", "--mode", "install", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitClean {
+		t.Fatalf("exit code = %d, want clean", result.ExitCode)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, out.String())
+	}
+	if decoded["install_executed"] != true {
+		t.Fatalf("install_executed = %v, want true", decoded["install_executed"])
+	}
+	installValue := decoded["report"].(map[string]any)["install"].(map[string]any)
+	if installValue["status"] != report.InstallStatusExecutedSuccess || installValue["package_spec"] != "pkg@1.0.0" {
+		t.Fatalf("install = %+v, want install summary", installValue)
+	}
+}
+
+func TestRunModeInstallRendersReportInstallSummary(t *testing.T) {
+	content := testTarGzip(t, "package/index.js", []byte("npm artifact"))
+	server, _ := newNPMArtifactServer(t, "pkg", "1.0.0", "2021-02-20T15:42:16.891Z", content)
+	defer server.Close()
+
+	oldBase := npm.RegistryBaseURL
+	npm.RegistryBaseURL = server.URL
+	defer func() { npm.RegistryBaseURL = oldBase }()
+
+	var out bytes.Buffer
+	fake := &fakeInstallRunner{}
+	app := newStaticConfigApp(rewritePlaceholderClient(server.Client(), server.URL), &out, &bytes.Buffer{}, config.Config{})
+	app.installer = fake
+
+	result, err := app.Run(context.Background(), []string{"--format", "report", "--mode", "install", "npm", "install", "pkg"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != ExitClean {
+		t.Fatalf("exit code = %d, want clean", result.ExitCode)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("stdout is not report JSON: %v\n%s", err, out.String())
+	}
+	installValue := decoded["install"].(map[string]any)
+	if installValue["status"] != report.InstallStatusExecutedSuccess || installValue["package_spec"] != "pkg@1.0.0" {
+		t.Fatalf("install = %+v, want install summary", installValue)
+	}
+	finalDecision := decoded["final_decision"].(map[string]any)
+	if finalDecision["install_executed"] != true {
+		t.Fatalf("final_decision = %+v, want install_executed true", finalDecision)
 	}
 }
 
@@ -1055,6 +1359,69 @@ func TestPyPIDependencyHistoryEnabledOnlyWhenDependencyCheckConfigured(t *testin
 }
 
 const serverURLPlaceholder = "http://sourcegate-test-server"
+
+type fakeInstallRunner struct {
+	calls   []pkginstaller.Request
+	summary report.InstallSummary
+}
+
+func (f *fakeInstallRunner) Install(_ context.Context, req pkginstaller.Request) report.InstallSummary {
+	f.calls = append(f.calls, req)
+	if f.summary.Status != "" {
+		summary := f.summary
+		summary.Manager = textOrDefault(summary.Manager, req.Manager)
+		if summary.PackageSpec == "" {
+			if exactSpec, err := pkginstaller.ExactPackageSpec(req); err == nil {
+				summary.PackageSpec = exactSpec
+			}
+		}
+		return summary
+	}
+	exitCode := 0
+	exactSpec, _ := pkginstaller.ExactPackageSpec(req)
+	return report.InstallSummary{
+		Status:                 report.InstallStatusExecutedSuccess,
+		Executed:               true,
+		Manager:                req.Manager,
+		PackageSpec:            exactSpec,
+		PackageManagerExitCode: &exitCode,
+		Message:                "package-manager install completed successfully",
+	}
+}
+
+func textOrDefault(value, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
+}
+
+func newNPMArtifactServer(t *testing.T, packageName, version, publishedAt string, content []byte) (*httptest.Server, *int) {
+	t.Helper()
+	sum := sha512.Sum512(content)
+	artifactRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/" + packageName:
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"name": "` + packageName + `",
+				"dist-tags": {"latest": "` + version + `"},
+				"time": {"` + version + `": "` + publishedAt + `"},
+				"versions": {"` + version + `": {"dist": {
+					"tarball": "` + serverURLPlaceholder + `/artifact.tgz",
+					"integrity": "sha512-` + base64.StdEncoding.EncodeToString(sum[:]) + `"
+				}}}
+			}`))
+		case "/artifact.tgz":
+			artifactRequests++
+			w.Write(content)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	return server, &artifactRequests
+}
 
 func rewritePlaceholderClient(client *http.Client, serverURL string) *http.Client {
 	copy := *client

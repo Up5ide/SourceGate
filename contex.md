@@ -12,8 +12,8 @@ PyPI install-target provenance inspection may run local `python -m pip debug --v
 ## Runtime Flow
 
 1. `cmd/sourcegate/main.go` creates the app, bounded context, and HTTP client.
-2. `internal/cli` parses information commands such as `--help`, `--version`, and `--print-config`, plus install-shaped commands such as `sourcegate npm install <package>[@<version>]` and `sourcegate pip install <package>[==<version>]`.
-3. `internal/app` handles information commands before registry work, loads config through `internal/configsource`, selects the ecosystem adapter, fetches metadata, runs policy checks, renders output, and returns an exit code.
+2. `internal/cli` parses information commands such as `--help`, `--version`, `--print-config`, and `sourcegate config ...`, plus install-shaped commands such as `sourcegate npm install <package>[@<version>]` and `sourcegate pip install <package>[==<version>]`.
+3. `internal/app` handles information and config commands before registry work, loads file config through `internal/configsource` or explicit presets through `internal/config`, selects the ecosystem adapter, fetches metadata, runs policy checks, renders output, and returns an exit code.
 4. `internal/ecosystem/npm` and `internal/ecosystem/pypi` fetch registry metadata and normalize it into `report.PackageReport`.
 5. `internal/checks` resolves registry-defined checks against policy tiers and appends findings.
 6. For `--mode artifact`, `internal/artifact` downloads and verifies the selected artifact unless metadata policy blocks it.
@@ -53,11 +53,11 @@ Checks evaluate tiers from strongest to weakest: `block`, then `alert`, then `in
 For one check, only the strongest matching tier should produce a finding.
 `BLOCK` findings set the report decision to `BLOCK` and return exit code `30`, but SourceGate still does not perform or stop a real install process.
 
-Policy input is grouped. Each tier contains a required `groups` map with every supported group and an optional `checks` map for detailed overrides. Group defaults set tier policy values, and explicit check overrides always win, including `false`.
+Policy input is grouped and override-only. Omitted policy, tiers, groups, group keys, and checks are disabled. Group defaults set tier policy values only when the group is explicitly `true`, and explicit check overrides always win, including `false`.
 Old flat tier keys from SourceGate 0.8.0 and earlier are rejected.
 When adding a policy group or check override, keep the grouped config parser, normalized config structs, policy registry, default config, embedded config fixture, docs, and tests aligned.
 
-Default builds use relaxed file config: a missing default config file is allowed and produces disabled policy, while an explicit missing `--config <path>` is an operational error. Builds created with `go build -tags embedded_config ./cmd/sourcegate` use strict embedded config, reject external config paths, and report the embedded config hash through `--print-config`. A present file config or embedded config must be one complete JSON value containing `policy`, all three tiers, and every supported group key in each tier. Companion options are validated on the normalized per-tier policy.
+Default builds use relaxed file config: a missing default config file is allowed and produces disabled policy, while an explicit missing `--config <path>` is an operational error. `--preset minimal|balanced|strict` explicitly uses a hard-coded preset for one run and is mutually exclusive with `--config`. Builds created with `go build -tags embedded_config ./cmd/sourcegate` use strict embedded config, reject external config paths, and report the embedded config hash through `--print-config`. A present file config or embedded config must be one complete JSON value, but policy contents may be partial and omitted values are disabled. Companion options are validated on the normalized per-tier policy.
 
 ## Current Checks
 

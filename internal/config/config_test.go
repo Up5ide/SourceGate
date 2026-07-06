@@ -144,6 +144,16 @@ func TestLoadMissingFileReturnsDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestLoadEmptyConfigProducesDisabledPolicy(t *testing.T) {
+	config, err := LoadBytes([]byte(`{}`))
+	if err != nil {
+		t.Fatalf("LoadBytes returned error: %v", err)
+	}
+	if config.Policy.Inform.MinimumDaysSinceLatestRelease != 0 || config.Policy.Alert.MinimumDaysSinceLatestRelease != 0 || config.Policy.Block.MinimumDaysSinceLatestRelease != 0 {
+		t.Fatalf("policy = %+v, want disabled policy", config.Policy)
+	}
+}
+
 func TestLoadRequiredRejectsMissingFile(t *testing.T) {
 	if _, err := LoadRequired(filepath.Join(t.TempDir(), "missing.json")); err == nil {
 		t.Fatalf("LoadRequired returned nil error")
@@ -163,6 +173,30 @@ func TestLoadAcceptsOmittedChecks(t *testing.T) {
 	}
 	if config.Policy.Alert.MinimumDaysSinceLatestRelease != 0 {
 		t.Fatalf("alert minimum days = %d, want disabled policy", config.Policy.Alert.MinimumDaysSinceLatestRelease)
+	}
+}
+
+func TestLoadAcceptsOmittedTiersAndGroups(t *testing.T) {
+	config, err := LoadBytes([]byte(`{
+		"policy": {
+			"alert": {
+				"groups": {
+					"npm_lifecycle": true
+				}
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("LoadBytes returned error: %v", err)
+	}
+	if config.Policy.Inform.MinimumDaysSinceLatestRelease != 0 {
+		t.Fatalf("inform policy = %+v, want disabled omitted tier", config.Policy.Inform)
+	}
+	if !config.Policy.Alert.InstallLifecycleScripts || config.Policy.Alert.MinimumDaysSinceLatestRelease != 0 {
+		t.Fatalf("alert policy = %+v, want only explicit group defaults", config.Policy.Alert)
+	}
+	if config.Policy.Block.SuspiciousInstallScriptCommands {
+		t.Fatalf("block policy = %+v, want disabled omitted tier", config.Policy.Block)
 	}
 }
 
@@ -418,12 +452,11 @@ func TestLoadRejectsOldFlatPolicyShape(t *testing.T) {
 	}
 }
 
-func TestLoadRequiresCompletePolicyConfig(t *testing.T) {
+func TestLoadRejectsInvalidTopLevelAndTierFields(t *testing.T) {
 	cases := map[string]string{
-		"missing policy":       `{"pypi_runtime":{}}`,
-		"missing tier":         `{"policy":{"inform":{"groups":{}},"alert":{"groups":{}}}}`,
-		"missing groups":       `{"policy":{"inform":{},"alert":{},"block":{}}}`,
-		"missing group member": `{"policy":{"inform":{"groups":{"release_metadata":false}},"alert":{"groups":{}},"block":{"groups":{}}}}`,
+		"unknown top level":  `{"unknown":true}`,
+		"unknown tier":       `{"policy":{"audit":{}}}`,
+		"unknown tier field": `{"policy":{"alert":{"minimum_days_since_latest_release":3}}}`,
 	}
 
 	for name, content := range cases {
@@ -475,6 +508,35 @@ func TestLoadRejectsMissingSameTierCompanionOptions(t *testing.T) {
 				t.Fatalf("LoadBytes returned nil error")
 			}
 		})
+	}
+}
+
+func TestLoadPresets(t *testing.T) {
+	for _, name := range []string{PresetMinimal, PresetBalanced, PresetStrict} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := LoadPreset(name)
+			if err != nil {
+				t.Fatalf("LoadPreset returned error: %v", err)
+			}
+			if cfg.Policy.Inform.MinimumDaysSinceLatestRelease == 0 && cfg.Policy.Alert.MinimumDaysSinceLatestRelease == 0 && !cfg.Policy.Block.SuspiciousInstallScriptCommands {
+				t.Fatalf("preset %s produced unexpectedly empty policy", name)
+			}
+			if _, err := PresetJSON(name, PresetFormatCompact); err != nil {
+				t.Fatalf("PresetJSON compact returned error: %v", err)
+			}
+			if _, err := PresetJSON(name, PresetFormatFull); err != nil {
+				t.Fatalf("PresetJSON full returned error: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadPresetRejectsUnknownPreset(t *testing.T) {
+	if _, err := LoadPreset("paranoid"); err == nil {
+		t.Fatalf("LoadPreset returned nil error")
+	}
+	if _, err := PresetJSON(PresetBalanced, "wide"); err == nil {
+		t.Fatalf("PresetJSON returned nil error for unsupported format")
 	}
 }
 

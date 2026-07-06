@@ -12,6 +12,7 @@ type Status struct {
 	AcceptsExternalConfig bool           `json:"accepts_external_config"`
 	ConfigPath            string         `json:"config_path,omitempty"`
 	DefaultPath           bool           `json:"default_path,omitempty"`
+	Preset                string         `json:"preset,omitempty"`
 	Exists                bool           `json:"exists"`
 	Valid                 bool           `json:"valid"`
 	Error                 string         `json:"error,omitempty"`

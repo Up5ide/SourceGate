@@ -20,8 +20,11 @@ type InstallRequest struct {
 	Inspect       bool
 	Mode          string
 	ConfigPath    string
+	Preset        string
 	OutputFormat  string
 	ReportVerbose bool
+	ConfigPreset  string
+	PresetFormat  string
 	PyPIRuntime   PyPIRuntimeOptions
 }
 
@@ -71,6 +74,16 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 				return InstallRequest{}, err
 			}
 			req.ConfigPath = value
+			args = remaining
+		case "--preset":
+			value, remaining, err := optionValue(option, args)
+			if err != nil {
+				return InstallRequest{}, err
+			}
+			if !supportedPreset(value) {
+				return InstallRequest{}, fmt.Errorf("unsupported preset %q: supported presets are minimal, balanced, and strict", value)
+			}
+			req.Preset = value
 			args = remaining
 		case "--debug":
 			req.Debug = true
@@ -139,6 +152,13 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 			return InstallRequest{}, fmt.Errorf("unsupported sourcegate option %q", option)
 		}
 	}
+	if req.ConfigPath != "" && req.Preset != "" {
+		return InstallRequest{}, fmt.Errorf("--config cannot be combined with --preset")
+	}
+
+	if len(args) > 0 && strings.EqualFold(strings.TrimSpace(args[0]), "config") {
+		return parseConfigCommand(req, args[1:])
+	}
 
 	if req.ReportVerbose && req.OutputFormat != OutputFormatReport {
 		return InstallRequest{}, fmt.Errorf("-v can only be used with --format report")
@@ -152,7 +172,10 @@ func ParseInstallCommand(args []string) (InstallRequest, error) {
 			return InstallRequest{}, fmt.Errorf("%s does not accept package-manager arguments", req.Action)
 		}
 		if req.Action != ActionPrintConfig && req.ConfigPath != "" {
-			return InstallRequest{}, fmt.Errorf("--config can only be used with install commands or --print-config")
+			return InstallRequest{}, fmt.Errorf("--config can only be used with install commands, --print-config, or sourcegate config commands")
+		}
+		if req.Action != ActionPrintConfig && req.Preset != "" {
+			return InstallRequest{}, fmt.Errorf("--preset can only be used with install commands or --print-config")
 		}
 		if req.Debug || req.Mode != ModeMetadata || req.OutputFormat != OutputFormatHuman || req.ReportVerbose || req.hasPyPIRuntimeOptions() {
 			return InstallRequest{}, fmt.Errorf("%s cannot be combined with install options", req.Action)
@@ -209,10 +232,13 @@ const (
 	OutputFormatJSON   = "json"
 	OutputFormatReport = "report"
 
-	ActionRun         = "run"
-	ActionHelp        = "help"
-	ActionVersion     = "version"
-	ActionPrintConfig = "print-config"
+	ActionRun           = "run"
+	ActionHelp          = "help"
+	ActionVersion       = "version"
+	ActionPrintConfig   = "print-config"
+	ActionConfigTest    = "config-test"
+	ActionConfigExplain = "config-explain"
+	ActionConfigPreset  = "config-preset"
 
 	ModeMetadata = "metadata"
 	ModeArtifact = "artifact"
@@ -305,4 +331,95 @@ func (req InstallRequest) hasPyPIRuntimeOptions() bool {
 		req.PyPIRuntime.PythonVersion != "" ||
 		req.PyPIRuntime.Implementation != "" ||
 		len(req.PyPIRuntime.ABIs) > 0
+}
+
+func parseConfigCommand(req InstallRequest, args []string) (InstallRequest, error) {
+	if req.Action != ActionRun {
+		return InstallRequest{}, fmt.Errorf("sourcegate config cannot be combined with another information command")
+	}
+	if req.Debug || req.Mode != ModeMetadata || req.OutputFormat != OutputFormatHuman || req.ReportVerbose || req.Preset != "" || req.hasPyPIRuntimeOptions() {
+		return InstallRequest{}, fmt.Errorf("sourcegate config cannot be combined with install options")
+	}
+	if len(args) == 0 {
+		return InstallRequest{}, fmt.Errorf("expected command shape: sourcegate config <test|explain|preset>")
+	}
+	subcommand := strings.ToLower(strings.TrimSpace(args[0]))
+	args = args[1:]
+	switch subcommand {
+	case "test", "explain":
+		action := ActionConfigTest
+		if subcommand == "explain" {
+			action = ActionConfigExplain
+		}
+		for len(args) > 0 {
+			option := strings.TrimSpace(args[0])
+			args = args[1:]
+			switch option {
+			case "--config":
+				if req.ConfigPath != "" {
+					return InstallRequest{}, fmt.Errorf("sourcegate option %q cannot be repeated", option)
+				}
+				value, remaining, err := optionValue(option, args)
+				if err != nil {
+					return InstallRequest{}, err
+				}
+				req.ConfigPath = value
+				args = remaining
+			default:
+				return InstallRequest{}, fmt.Errorf("unsupported sourcegate config %s option %q", subcommand, option)
+			}
+		}
+		req.Action = action
+		return req, nil
+	case "preset":
+		if req.ConfigPath != "" {
+			return InstallRequest{}, fmt.Errorf("--config cannot be used with sourcegate config preset")
+		}
+		if len(args) == 0 {
+			return InstallRequest{}, fmt.Errorf("expected command shape: sourcegate config preset <minimal|balanced|strict>")
+		}
+		name := strings.TrimSpace(args[0])
+		if !supportedPreset(name) {
+			return InstallRequest{}, fmt.Errorf("unsupported preset %q: supported presets are minimal, balanced, and strict", name)
+		}
+		req.ConfigPreset = name
+		req.PresetFormat = "compact"
+		args = args[1:]
+		seenFormat := false
+		for len(args) > 0 {
+			option := strings.TrimSpace(args[0])
+			args = args[1:]
+			switch option {
+			case "--format":
+				if seenFormat {
+					return InstallRequest{}, fmt.Errorf("sourcegate option %q cannot be repeated", option)
+				}
+				seenFormat = true
+				value, remaining, err := optionValue(option, args)
+				if err != nil {
+					return InstallRequest{}, err
+				}
+				if value != "compact" && value != "full" {
+					return InstallRequest{}, fmt.Errorf("unsupported preset format %q: supported formats are compact and full", value)
+				}
+				req.PresetFormat = value
+				args = remaining
+			default:
+				return InstallRequest{}, fmt.Errorf("unsupported sourcegate config preset option %q", option)
+			}
+		}
+		req.Action = ActionConfigPreset
+		return req, nil
+	default:
+		return InstallRequest{}, fmt.Errorf("unsupported sourcegate config command %q: supported commands are test, explain, and preset", subcommand)
+	}
+}
+
+func supportedPreset(value string) bool {
+	switch value {
+	case "minimal", "balanced", "strict":
+		return true
+	default:
+		return false
+	}
 }

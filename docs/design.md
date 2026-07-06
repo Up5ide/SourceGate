@@ -7,8 +7,8 @@ SourceGate is a pre-install security gate for package-install-shaped commands. I
 The high-level flow is:
 
 1. `cmd/sourcegate` creates a bounded context and HTTP client.
-2. `internal/cli` parses information commands such as `--help`, `--version`, and `--print-config`, plus install-shaped commands like `sourcegate npm install <package>[@<version>]` or `sourcegate pip install <package>[==<version>]`, with global prefix options such as `--mode`, `--config`, `--debug`, `--format`, report-only `-v`, and PyPI target overrides.
-3. `internal/app` handles information commands before registry work, loads config through `internal/configsource`, selects an ecosystem adapter, fetches metadata for the parsed package spec, sets `report.evaluation_mode`, runs policy checks, and renders output.
+2. `internal/cli` parses information commands such as `--help`, `--version`, `--print-config`, and `sourcegate config ...`, plus install-shaped commands like `sourcegate npm install <package>[@<version>]` or `sourcegate pip install <package>[==<version>]`, with global prefix options such as `--mode`, `--config`, `--preset`, `--debug`, `--format`, report-only `-v`, and PyPI target overrides.
+3. `internal/app` handles information and config commands before registry work, loads file config through `internal/configsource` or explicit presets through `internal/config`, selects an ecosystem adapter, fetches metadata for the parsed package spec, sets `report.evaluation_mode`, runs policy checks, and renders output.
 4. `internal/ecosystem/npm` or `internal/ecosystem/pypi` selects either the requested exact version or the registry latest release and converts registry responses into a shared `report.PackageReport`.
 5. `internal/checks` evaluates configured policy tiers and appends findings to the report.
 6. When `--mode artifact` is set and metadata policy does not block, `internal/artifact` downloads one selected artifact into a temporary file, enforces limits, and verifies its digest.
@@ -96,9 +96,9 @@ Unversioned requests preserve the original behavior and inspect the registry lat
 
 Configuration is parsed and validated by `internal/config`, then selected by `internal/configsource`.
 
-Default builds use relaxed file config: `sourcegate.config.json` from the current working directory unless `--config <path>` is provided. A missing default config file produces a zero policy, but a missing explicit config path is an operational error. Builds created with `go build -tags embedded_config ./cmd/sourcegate` use strict embedded config, reject `--config`, and report the embedded config hash through `--print-config`.
+Default builds use relaxed file config: `sourcegate.config.json` from the current working directory unless `--config <path>` is provided. A missing default config file produces a zero policy, but a missing explicit config path is an operational error. `--preset minimal|balanced|strict` explicitly uses a hard-coded preset for one run and is mutually exclusive with `--config`. Builds created with `go build -tags embedded_config ./cmd/sourcegate` use strict embedded config, reject `--config`, and report the embedded config hash through `--print-config`.
 
-A present file config or embedded config is validated as one complete JSON value and must contain `policy`, all three tiers, and every supported group key under each tier's `groups` map. Per-check overrides live under each tier's optional `checks` map. Old flat tier keys are rejected in SourceGate 0.8.2.
+A present file config or embedded config is validated as one complete JSON value. Policy input is override-only: omitted policy, tiers, groups, group keys, and checks are disabled. Per-check overrides live under each tier's optional `checks` map and can enable or disable individual checks independently of groups. Old flat tier keys are rejected in SourceGate 0.8.2.
 
 The policy model has three tiers:
 

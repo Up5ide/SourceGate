@@ -124,3 +124,43 @@ func TestRenderReportHighestSeverityNone(t *testing.T) {
 		t.Fatalf("report missing empty finding decision defaults:\n%s", buf.String())
 	}
 }
+
+func TestRenderReportIncludesInstallSummary(t *testing.T) {
+	exitCode := 0
+	var buf bytes.Buffer
+	err := RenderReport(&buf, report.PackageReport{
+		EvaluationMode:  "install",
+		Ecosystem:       "npm",
+		Name:            "lodash",
+		SelectedVersion: "4.17.21",
+		Decision:        report.DecisionAllow,
+		Install: &report.InstallSummary{
+			Status:                 report.InstallStatusExecutedSuccess,
+			Executed:               true,
+			Manager:                "npm",
+			PackageSpec:            "lodash@4.17.21",
+			PackageManagerExitCode: &exitCode,
+		},
+	}, ReportOptions{
+		Argv:     []string{"sourcegate", "--format", "report", "--mode", "install", "npm", "install", "lodash"},
+		Manager:  "npm",
+		Command:  "install",
+		ExitCode: 0,
+	})
+	if err != nil {
+		t.Fatalf("RenderReport returned error: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+		t.Fatalf("report JSON did not decode: %v\n%s", err, buf.String())
+	}
+	installValue := decoded["install"].(map[string]any)
+	if installValue["status"] != report.InstallStatusExecutedSuccess || installValue["package_spec"] != "lodash@4.17.21" {
+		t.Fatalf("install = %+v, want install summary", installValue)
+	}
+	finalDecision := decoded["final_decision"].(map[string]any)
+	if finalDecision["install_executed"] != true {
+		t.Fatalf("final_decision = %+v, want install_executed true", finalDecision)
+	}
+}

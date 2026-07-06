@@ -100,8 +100,8 @@ No baseline hypothesis changed because of registry drift during this snapshot.
 ## Temporary Policy Experiments
 
 Each policy experiment ran from a temporary workspace-local directory containing
-a full grouped copy of `sourcegate.config.json`. Overrides were made under the
-relevant tier's `checks` map while every tier kept the complete `groups` map.
+a copy of `sourcegate.config.json`. Overrides were made under the relevant
+tier's `checks` map.
 The checked-in config was not changed.
 
 | Experiment | Package | Temporary config delta | Expected trace | Observed trace | Result |

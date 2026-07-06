@@ -21,7 +21,11 @@ func RenderJSON(w io.Writer, pkg report.PackageReport) error {
 	return encoder.Encode(JSONReport{
 		SchemaVersion:     version.Current,
 		SourceGateVersion: version.Current,
-		InstallExecuted:   false,
+		InstallExecuted:   installExecuted(pkg),
 		Report:            pkg,
 	})
+}
+
+func installExecuted(pkg report.PackageReport) bool {
+	return pkg.Install != nil && pkg.Install.Executed
 }

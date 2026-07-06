@@ -19,6 +19,23 @@ const (
 	ArtifactInspectionStatusInspected    = "INSPECTED"
 )
 
+const (
+	InstallStatusSkippedBlocked  = "SKIPPED_BLOCKED"
+	InstallStatusExecutedSuccess = "EXECUTED_SUCCESS"
+	InstallStatusExecutedFailed  = "EXECUTED_FAILED"
+	InstallStatusTimedOut        = "TIMED_OUT"
+)
+
+type InstallSummary struct {
+	Status                 string `json:"status"`
+	Executed               bool   `json:"executed"`
+	Manager                string `json:"manager,omitempty"`
+	PackageSpec            string `json:"package_spec,omitempty"`
+	PackageManagerExitCode *int   `json:"package_manager_exit_code,omitempty"`
+	DurationMilliseconds   int64  `json:"duration_ms,omitempty"`
+	Message                string `json:"message,omitempty"`
+}
+
 type ArtifactCandidate struct {
 	SelectionError  string `json:"-"`
 	URL             string `json:"-"`
@@ -273,4 +290,5 @@ type PackageReport struct {
 	ArtifactDownload            *ArtifactDownloadSummary        `json:"artifact_download,omitempty"`
 	ArtifactInspection          *ArtifactInspectionSummary      `json:"artifact_inspection,omitempty"`
 	ArtifactDelta               *ArtifactDeltaSummary           `json:"artifact_delta,omitempty"`
+	Install                     *InstallSummary                 `json:"install,omitempty"`
 }

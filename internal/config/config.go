@@ -213,6 +213,9 @@ func normalizeRawPolicyTier(tier string, raw rawPolicyTierConfig) (PolicyTierCon
 			applyGroupDefaults(tier, group, &policy)
 		}
 	}
+	if tier == "alert" && raw.Groups[GroupNPMLifecycle] && raw.Groups[GroupReleaseMetadata] {
+		policy.InstallScriptAddedAfterDormancy = true
+	}
 
 	for _, check := range sortedRawKeys(raw.Checks) {
 		if err := applyCheckOverride(tier, check, raw.Checks[check], &policy); err != nil {
@@ -223,23 +226,10 @@ func normalizeRawPolicyTier(tier string, raw rawPolicyTierConfig) (PolicyTierCon
 }
 
 func validateGroupMap(tier string, groups map[string]bool) error {
-	if groups == nil {
-		return fmt.Errorf("policy.%s.groups is required", tier)
-	}
-	var missing []string
-	for _, group := range supportedPolicyGroups {
-		if _, ok := groups[group]; !ok {
-			missing = append(missing, "policy."+tier+".groups."+group)
-		}
-	}
 	for group := range groups {
 		if !supportedGroup(group) {
 			return fmt.Errorf("policy.%s.groups contains unsupported group %q", tier, group)
 		}
-	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return fmt.Errorf("missing required field(s): %s", strings.Join(missing, ", "))
 	}
 	return nil
 }
@@ -271,7 +261,6 @@ func applyGroupDefaults(tier, group string, policy *PolicyTierConfig) {
 		case "alert":
 			policy.InstallLifecycleScripts = true
 			policy.InstallLifecycleHistoryVersions = 5
-			policy.InstallScriptAddedAfterDormancy = true
 		case "block":
 			policy.SuspiciousInstallScriptCommands = true
 		}

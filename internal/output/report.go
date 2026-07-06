@@ -21,12 +21,13 @@ type ReportOptions struct {
 }
 
 type ToolReport struct {
-	SourceGateReport  ReportHeader         `json:"sourcegate_report"`
-	Command           ReportCommand        `json:"command"`
-	Package           ReportPackage        `json:"package"`
-	TriggeredPolicies []report.Finding     `json:"triggered_policies"`
-	FinalDecision     ReportFinalDecision  `json:"final_decision"`
-	Configuration     *ReportConfiguration `json:"configuration,omitempty"`
+	SourceGateReport  ReportHeader           `json:"sourcegate_report"`
+	Command           ReportCommand          `json:"command"`
+	Package           ReportPackage          `json:"package"`
+	TriggeredPolicies []report.Finding       `json:"triggered_policies"`
+	Install           *report.InstallSummary `json:"install,omitempty"`
+	FinalDecision     ReportFinalDecision    `json:"final_decision"`
+	Configuration     *ReportConfiguration   `json:"configuration,omitempty"`
 }
 
 type ReportHeader struct {
@@ -91,11 +92,12 @@ func RenderReport(w io.Writer, pkg report.PackageReport, options ReportOptions) 
 			SelectedPublishedAt: pkg.SelectedPublishedAt,
 		},
 		TriggeredPolicies: append([]report.Finding(nil), pkg.Findings...),
+		Install:           pkg.Install,
 		FinalDecision: ReportFinalDecision{
 			Decision:        reportDecision(pkg.Decision),
 			ExitCode:        options.ExitCode,
 			HighestSeverity: highestSeverity(pkg.Findings),
-			InstallExecuted: false,
+			InstallExecuted: installExecuted(pkg),
 		},
 		Configuration: reportConfiguration(options.ConfigStatus),
 	})

@@ -138,10 +138,12 @@ func TestParseInstallCommandInfoActions(t *testing.T) {
 		args       []string
 		wantAction string
 		wantConfig string
+		wantPreset string
 	}{
-		"help":         {args: []string{"--help"}, wantAction: ActionHelp},
-		"version":      {args: []string{"--version"}, wantAction: ActionVersion},
-		"print config": {args: []string{"--config", "strict.json", "--print-config"}, wantAction: ActionPrintConfig, wantConfig: "strict.json"},
+		"help":                {args: []string{"--help"}, wantAction: ActionHelp},
+		"version":             {args: []string{"--version"}, wantAction: ActionVersion},
+		"print config":        {args: []string{"--config", "strict.json", "--print-config"}, wantAction: ActionPrintConfig, wantConfig: "strict.json"},
+		"print preset config": {args: []string{"--preset", "balanced", "--print-config"}, wantAction: ActionPrintConfig, wantPreset: "balanced"},
 	}
 
 	for name, tc := range cases {
@@ -150,8 +152,36 @@ func TestParseInstallCommandInfoActions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseInstallCommand returned error: %v", err)
 			}
-			if req.Action != tc.wantAction || req.ConfigPath != tc.wantConfig {
-				t.Fatalf("request = %+v, want action %q config %q", req, tc.wantAction, tc.wantConfig)
+			if req.Action != tc.wantAction || req.ConfigPath != tc.wantConfig || req.Preset != tc.wantPreset {
+				t.Fatalf("request = %+v, want action %q config %q preset %q", req, tc.wantAction, tc.wantConfig, tc.wantPreset)
+			}
+		})
+	}
+}
+
+func TestParseInstallCommandConfigSubcommands(t *testing.T) {
+	cases := map[string]struct {
+		args       []string
+		wantAction string
+		wantConfig string
+		wantPreset string
+		wantFormat string
+	}{
+		"test":        {args: []string{"config", "test"}, wantAction: ActionConfigTest},
+		"test config": {args: []string{"config", "test", "--config", "strict.json"}, wantAction: ActionConfigTest, wantConfig: "strict.json"},
+		"explain":     {args: []string{"config", "explain"}, wantAction: ActionConfigExplain},
+		"preset":      {args: []string{"config", "preset", "balanced"}, wantAction: ActionConfigPreset, wantPreset: "balanced", wantFormat: "compact"},
+		"preset full": {args: []string{"config", "preset", "strict", "--format", "full"}, wantAction: ActionConfigPreset, wantPreset: "strict", wantFormat: "full"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			req, err := ParseInstallCommand(tc.args)
+			if err != nil {
+				t.Fatalf("ParseInstallCommand returned error: %v", err)
+			}
+			if req.Action != tc.wantAction || req.ConfigPath != tc.wantConfig || req.ConfigPreset != tc.wantPreset || req.PresetFormat != tc.wantFormat {
+				t.Fatalf("request = %+v, want action %q config %q preset %q format %q", req, tc.wantAction, tc.wantConfig, tc.wantPreset, tc.wantFormat)
 			}
 		})
 	}
@@ -210,6 +240,16 @@ func TestParseInstallCommandPyPIRuntimeOptions(t *testing.T) {
 	}
 }
 
+func TestParseInstallCommandPresetRuntime(t *testing.T) {
+	req, err := ParseInstallCommand([]string{"--preset", "balanced", "npm", "install", "lodash"})
+	if err != nil {
+		t.Fatalf("ParseInstallCommand returned error: %v", err)
+	}
+	if req.Preset != "balanced" || req.Ecosystem != ecosystem.NPM {
+		t.Fatalf("request = %+v, want balanced npm request", req)
+	}
+}
+
 func TestParseInstallCommandRejectsUnsupportedShapes(t *testing.T) {
 	cases := [][]string{
 		{"npm", "install"},
@@ -238,6 +278,14 @@ func TestParseInstallCommandRejectsUnsupportedShapes(t *testing.T) {
 		{"--format", "report", "-v", "-v", "npm", "install", "lodash"},
 		{"--debug", "--format", "report", "npm", "install", "lodash"},
 		{"--format", "report", "--debug", "npm", "install", "lodash"},
+		{"--config", "strict.json", "--preset", "balanced", "npm", "install", "lodash"},
+		{"--preset", "paranoid", "npm", "install", "lodash"},
+		{"config"},
+		{"config", "preset"},
+		{"config", "preset", "paranoid"},
+		{"config", "preset", "balanced", "--format", "json"},
+		{"--config", "strict.json", "config", "preset", "balanced"},
+		{"config", "test", "--preset", "balanced"},
 		{"-x", "npm", "install", "lodash"},
 		{"--verbose", "npm", "install", "lodash"},
 		{"--python", "py", "npm", "install", "lodash"},

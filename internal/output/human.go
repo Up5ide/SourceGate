@@ -128,10 +128,30 @@ func RenderHuman(w io.Writer, pkg report.PackageReport) {
 		fmt.Fprintf(w, "  File Count Delta: %+d\n", pkg.ArtifactDelta.FileCountDelta)
 		fmt.Fprintf(w, "  Uncompressed Size Delta: %+d bytes\n", pkg.ArtifactDelta.UncompressedSizeDeltaBytes)
 	}
+	if pkg.Install != nil {
+		fmt.Fprintln(w, "Install Summary:")
+		fmt.Fprintf(w, "  Status: %s\n", valueOrUnknown(pkg.Install.Status))
+		fmt.Fprintf(w, "  Executed: %s\n", yesNo(pkg.Install.Executed))
+		if pkg.Install.Manager != "" {
+			fmt.Fprintf(w, "  Manager: %s\n", pkg.Install.Manager)
+		}
+		if pkg.Install.PackageSpec != "" {
+			fmt.Fprintf(w, "  Package: %s\n", pkg.Install.PackageSpec)
+		}
+		if pkg.Install.PackageManagerExitCode != nil {
+			fmt.Fprintf(w, "  Package Manager Exit Code: %d\n", *pkg.Install.PackageManagerExitCode)
+		}
+		if pkg.Install.DurationMilliseconds > 0 {
+			fmt.Fprintf(w, "  Duration: %d ms\n", pkg.Install.DurationMilliseconds)
+		}
+		if pkg.Install.Message != "" {
+			fmt.Fprintf(w, "  Message: %s\n", pkg.Install.Message)
+		}
+	}
 
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Decision: %s\n", decisionOrInspectOnly(pkg.Decision))
-	fmt.Fprintln(w, "Install executed: no")
+	fmt.Fprintf(w, "Install executed: %s\n", yesNo(installExecuted(pkg)))
 
 	if len(pkg.DebugTrace) > 0 {
 		fmt.Fprintln(w)
@@ -171,6 +191,13 @@ func decisionOrInspectOnly(decision report.Decision) report.Decision {
 		return report.DecisionInspectOnly
 	}
 	return decision
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }
 
 func executionSurfaceDisplay(surface report.ArtifactExecutionSurface) string {

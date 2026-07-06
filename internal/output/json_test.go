@@ -110,3 +110,35 @@ func TestRenderJSONIncludesArtifactSummaryButNotInternalCandidate(t *testing.T) 
 		t.Fatalf("JSON artifact fields incorrect:\n%s", buf.String())
 	}
 }
+
+func TestRenderJSONIncludesInstallSummary(t *testing.T) {
+	exitCode := 0
+	var buf bytes.Buffer
+	err := RenderJSON(&buf, report.PackageReport{
+		Name: "lodash",
+		Install: &report.InstallSummary{
+			Status:                 report.InstallStatusExecutedSuccess,
+			Executed:               true,
+			Manager:                "npm",
+			PackageSpec:            "lodash@4.17.21",
+			PackageManagerExitCode: &exitCode,
+			Message:                "package-manager install completed successfully",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RenderJSON returned error: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+		t.Fatalf("JSON did not decode: %v\n%s", err, buf.String())
+	}
+	if decoded["install_executed"] != true {
+		t.Fatalf("install_executed = %v, want true", decoded["install_executed"])
+	}
+	reportValue := decoded["report"].(map[string]any)
+	installValue := reportValue["install"].(map[string]any)
+	if installValue["status"] != report.InstallStatusExecutedSuccess || installValue["package_spec"] != "lodash@4.17.21" {
+		t.Fatalf("install = %+v, want install summary", installValue)
+	}
+}
