@@ -4,9 +4,9 @@ This document lists package-registry attack vectors that are relevant to SourceG
 
 - Metadata mode evaluates registry metadata only.
 - Artifact mode adds verified archive inventory, bounded manifest/install metadata, path/file-type signals, and capped high-confidence behavior indicators without extraction.
-- Future install mode is reserved and does not run today.
+- Install mode runs metadata and verified root-artifact checks, then invokes the real package manager only when policy does not block.
 
-Rows below may include future detection ideas. Current checks should not be read as broad source-code scanning, malware classification, runtime behavior analysis, or package-manager install enforcement.
+Rows below may include future detection ideas. Current checks should not be read as broad source-code scanning, malware classification, runtime behavior analysis, transitive dependency gating, or package-manager script suppression.
 
 | Attack vector | Description | Example | Reference |
 | --- | --- | --- | --- |

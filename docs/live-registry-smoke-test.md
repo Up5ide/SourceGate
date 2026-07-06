@@ -231,3 +231,25 @@ The initial `--inspect` download stage was checked against exact live releases:
 | `.\sourcegate-live.exe --inspect npm install sharp@0.34.5` | Metadata policy produced `BLOCK`; artifact status was `SKIPPED_BLOCKED` and no artifact download was attempted. | PASS |
 
 No package was installed or archive extracted.
+
+## Install Mode Smoke Test: July 6, 2026
+
+The initial `--mode install` implementation was checked with the opt-in live
+test suite:
+
+```powershell
+$env:SOURCEGATE_LIVE_INSTALL='1'; go test ./internal/app -run TestLiveInstall -count=1 -v
+```
+
+The tests create temporary npm workspaces or Python virtual environments and
+delete them after the run. npm was not available on the test machine's `PATH`,
+so the npm live install cases were skipped.
+
+| Ecosystem | Package | Scenario | Observed result | Classification |
+| --- | --- | --- | --- | --- |
+| npm | `lodash@4.17.21` | Clean install | Skipped because `npm` was unavailable on `PATH`. | SKIP |
+| npm | `core-js@3.49.0` | Alert still installs | Skipped because `npm` was unavailable on `PATH`. | SKIP |
+| npm | `lodash@4.17.21` | Forced block skips install | Skipped because `npm` was unavailable on `PATH`. | SKIP |
+| PyPI | `requests==2.34.2` | Clean install | Installed successfully in a temporary virtual environment. | PASS |
+| PyPI | `cryptography==48.0.0` | Native artifact signal alert still installs | Artifact inspection produced the expected native-file signal and install completed in a temporary virtual environment. | PASS |
+| PyPI | `requests==2.34.2` | Forced block skips install | Policy blocked the package and `requests` was not installed in the temporary virtual environment. | PASS |
