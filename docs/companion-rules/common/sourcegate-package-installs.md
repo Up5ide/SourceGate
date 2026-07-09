@@ -31,4 +31,6 @@ SourceGate currently supports one package spec per command. Ask the user before 
 - global installs
 - editable installs
 - local path, Git URL, tarball, or wheel installs
+- private registry or authenticated registry workflows
+- `pnpm`, `yarn`, `uv`, `poetry`, or other package managers
 - package-manager options not accepted by SourceGate

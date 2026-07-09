@@ -24,4 +24,4 @@ Copy the file for your coding tool into the target project. These files do not i
 
 ## Notes
 
-SourceGate currently supports one package spec per install command. If a user asks for unsupported package-manager options, lockfile installs, requirements files, workspaces, global installs, editable installs, or multiple packages in one command, the agent should ask before using direct package-manager commands.
+SourceGate currently supports one package spec per install command. If a user asks for unsupported package-manager options, lockfile installs, requirements files, workspaces, global installs, editable installs, private registry/auth workflows, `pnpm`, `yarn`, `uv`, `poetry`, or multiple packages in one command, the agent should ask before using direct package-manager commands.

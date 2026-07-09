@@ -1,16 +1,54 @@
 # SourceGate
 
-SourceGate is a security-first Go CLI and pre-install security gate for package-manager commands.
+SourceGate is a security-first Go CLI and root-package pre-install gate for npm and PyPI package installs.
 
-The long-term goal is to become a local, policy-driven enforcement layer for software supply-chain risk. SourceGate should help developers and CI systems identify risky packages, explain the reasons clearly, and eventually allow, warn, or block installation based on deterministic policy.
+It accepts a narrow install-shaped command, fetches public registry metadata, evaluates deterministic policy checks, can verify and inspect one selected root package artifact, and in `--mode install` runs the real package-manager install only when policy does not block.
 
-## Version 0.9.0 Scope
+SourceGate 1.0 gates the requested root package. Transitive dependencies are still resolved and installed by `npm` or `pip`, and deeper transitive dependency gating is tracked as future work.
 
-Version 0.9.0 activates real gated install mode. SourceGate can now inspect the requested root package, verify and archive-inspect its selected install-target artifact, and then run the real package manager when policy does not block. Current development also includes explicit `--format report` output for deterministic tool and AI-agent consumption, override-only grouped policy configuration, config presets, npm dependency/source metadata checks, private package public-registry policy, artifact general risk signals, artifact deltas, and optional companion rules for AI coding tools.
+## Quick Start
 
-`--mode metadata` fetches public registry metadata only. `--mode artifact` additionally downloads one preferred install-target artifact into an OS temporary file, verifies its registry digest, inspects archive safety metadata, bounded install/build metadata, native/executable file type signals, general path/manifest risk signals, bounded suspicious behavior indicators, and optional previous-artifact deltas without extraction, and deletes temporary artifacts before exit. `--mode install` performs the same metadata and verified root-artifact gate, then invokes `npm install` or `pip install` for the exact selected package version unless policy blocks.
+For the 1.0 release, install SourceGate with Go:
 
-Supported command shape:
+```bash
+go install github.com/sourcegate/sourcegate/cmd/sourcegate@v1.0.0
+```
+
+Do not tag `v1.0.0` until the v1.0 blocker issues are closed. During development, use a local build or the current checked-out source instead.
+
+First-run commands:
+
+```bash
+# Metadata inspection only. This is the default and does not install anything.
+sourcegate npm install lodash
+
+# Verified root-artifact inspection. This downloads and inspects one artifact, then exits.
+sourcegate --mode artifact npm install lodash
+
+# Real root-package install gate. This installs only if metadata and artifact policy allow it.
+sourcegate --mode install npm install lodash@4.17.21
+
+# Validate and explain the active configuration without registry access.
+sourcegate config test
+sourcegate config explain
+
+# Compact deterministic JSON report for tools, CI, IDEs, and AI agents.
+sourcegate --format report npm install lodash
+```
+
+## Modes
+
+`--mode metadata` is the default. It fetches public registry metadata, evaluates metadata policy, prints the decision, and never downloads artifacts or installs packages.
+
+`--mode artifact` runs metadata checks first. If metadata policy does not block, SourceGate downloads one preferred install-target artifact into an OS temporary file, verifies its registry digest, inspects archive safety metadata, bounded install/build metadata, native/executable file type signals, general path/manifest risk signals, bounded suspicious behavior indicators, and optional previous-artifact deltas without extraction, then deletes temporary artifacts before exit.
+
+`--mode install` runs the same metadata and verified root-artifact gate. If metadata or artifact policy produces `BLOCK`, SourceGate skips the package-manager install and exits with code `30`; otherwise it invokes `npm install <name>@<selected-version>` or `pip install <name>==<selected-version>` and records an install summary in human, JSON, and report output.
+
+If artifact policy is enabled but the command uses metadata mode, SourceGate prints a warning that artifact checks did not run. Use `--mode artifact` for deeper inspection without installing, or `--mode install` for the real gated install path.
+
+## Supported Command Shapes
+
+Global SourceGate options must appear before `npm` or `pip`:
 
 ```bash
 sourcegate --help
@@ -22,34 +60,31 @@ sourcegate config preset balanced
 sourcegate config preset strict --format full
 sourcegate --config ./strict.json --print-config
 sourcegate --preset balanced npm install <package>
-sourcegate [--config <path>] [--mode metadata|artifact|install] npm install <package>
-sourcegate [--config <path>] [--mode metadata|artifact|install] npm install <package>@<version>
-sourcegate [--config <path>] [--mode metadata|artifact|install] pip install <package>
-sourcegate [--config <path>] [--mode metadata|artifact|install] pip install <package>==<version>
-sourcegate --format json npm install <package>
-sourcegate --format json pip install <package>==<version>
-sourcegate --format report npm install <package>
-sourcegate --format report -v pip install <package>==<version>
-sourcegate --debug npm install <package>
-sourcegate --debug pip install <package>
-sourcegate --mode artifact npm install <package>
-sourcegate --mode artifact pip install <package>
-sourcegate --mode install npm install <package>
-sourcegate --mode install pip install <package>
-sourcegate --debug --python python --target-platform linux_x86_64 --python-version 3.12 --implementation cp --abi cp312 pip install <package>
+sourcegate [--config <path>|--preset <name>] [--mode metadata|artifact|install] [--debug] [--format human|json|report] [-v] npm install <package>
+sourcegate [--config <path>|--preset <name>] [--mode metadata|artifact|install] [--debug] [--format human|json|report] [-v] npm install <package>@<version>
+sourcegate [--config <path>|--preset <name>] [--mode metadata|artifact|install] [--debug] [--format human|json|report] [-v] pip install <package>
+sourcegate [--config <path>|--preset <name>] [--mode metadata|artifact|install] [--debug] [--format human|json|report] [-v] pip install <package>==<version>
+sourcegate [--config <path>|--preset <name>] [--mode metadata|artifact|install] [--debug] [--format human|json|report] [-v] [--python <executable>] [--target-platform <platform>] [--python-version <version>] [--implementation <name>] [--abi <abi>] pip install <package>[==<version>]
+sourcegate --inspect ...  # deprecated alias for --mode artifact
 ```
 
-Expected behavior:
+`--format json` emits the full structured package report. `--format report` emits a compact deterministic decision report, and `--format report -v` includes config status and the effective normalized configuration. PyPI inspection also accepts `--python`, `--target-platform`, `--python-version`, `--implementation`, and repeatable `--abi` target overrides; `pip` installation itself still uses the `pip` command on `PATH`.
 
-1. Parse the ecosystem, package-manager command, package name, and optional exact version.
-2. Query the relevant public registry.
-3. Select the requested exact version or the registry latest release when no version is requested.
-4. Display available package metadata and tiered policy findings for the selected release.
-5. In `metadata` mode, report the decision without downloading artifacts or installing packages.
-6. In `artifact` mode, verify and inspect one selected root artifact before reporting the decision.
-7. In `install` mode, run the real package-manager install only when policy does not block.
+## Unsupported Workflows
 
-Global prefix options can be passed before the package manager. The optional `--debug` flag appends a concise evaluation trace to standard output. `--mode artifact` downloads, verifies, archive-inspects, and detects install/build execution surfaces, suspicious native/executable file types, and suspicious behavior indicators in one preferred install-target artifact after metadata policy evaluation; a metadata `BLOCK` result skips the download. `--mode install` always runs that root-artifact inspection before installing and records an install summary in human, JSON, and report output. `--inspect` remains as a deprecated alias for `--mode artifact`. Use `--format json` for the full structured package report, or `--format report` for a compact deterministic decision report for tools and AI agents. `--format report -v` includes the effective configuration. PyPI inspection also accepts `--python`, `--target-platform`, `--python-version`, `--implementation`, and repeatable `--abi` target overrides; `pip` installation itself still uses the `pip` command on `PATH`.
+SourceGate 1.0 intentionally rejects package-manager workflows it cannot gate clearly:
+
+- Multiple packages in one command.
+- Package-manager flags after `npm` or `pip`.
+- `npm install` or `pip install` with no package argument.
+- Lockfile-only installs and requirements-file installs such as `pip install -r requirements.txt`.
+- Global installs.
+- Editable installs.
+- Local path, Git URL, tarball, wheel, or direct artifact installs.
+- `pnpm`, `yarn`, `uv`, `poetry`, and other package-manager workflows.
+- Private registry and authenticated registry workflows.
+
+Treat unsupported workflows as roadmap items, not hidden supported behavior.
 
 ## Mission
 
@@ -64,11 +99,11 @@ The project aims to:
 - Make risk findings explainable.
 - Prefer deterministic rules over opaque scoring.
 - Provide local-first behavior with no cloud dependency required.
-- Support policy enforcement in later versions.
+- Enforce policy for supported root-package install commands.
 
 ## Current Support
 
-SourceGate currently targets inspection and gated installation for npm and PyPI packages.
+SourceGate currently targets inspection and root-package gated installation for npm and PyPI packages.
 
 Supported ecosystems:
 
@@ -127,7 +162,7 @@ Later work:
 
 SourceGate is not intended to replace vulnerability scanners, antivirus tools, or full runtime malware analysis.
 
-It is a supply-chain risk gate. The goal is to inspect, explain, and eventually enforce decisions before package installation.
+It is a supply-chain risk gate. The goal is to inspect, explain, and enforce deterministic decisions before supported root-package installations.
 
 ## Development
 

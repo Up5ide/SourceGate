@@ -2,11 +2,11 @@
 
 ## Project Purpose
 
-SourceGate is a Go CLI and pre-install security gate that inspects package registry metadata and verified root package artifacts before a package install is trusted.
+SourceGate is a Go CLI and root-package pre-install security gate that inspects package registry metadata and verified root package artifacts before a package install is trusted.
 It accepts install-shaped commands for npm and pip, fetches public registry metadata, evaluates deterministic policy checks, prints human, full JSON, or compact report JSON output, and can optionally run the real package-manager install in `--mode install` when policy does not block.
 
 Default commands currently run in `--mode metadata`. `--mode artifact` additionally downloads one preferred install-target artifact to a verified temporary file and inspects archive metadata, bounded install/build metadata, native/executable file type signals, general path/manifest risk signals, high-confidence suspicious behavior indicators, and policy-enabled immediate-previous artifact deltas without extraction. `--inspect` remains a deprecated alias for `--mode artifact`. `--mode install` runs metadata checks, always verifies and inspects one selected root artifact when metadata policy does not block, then invokes `npm install <name>@<selected-version>` or `pip install <name>==<selected-version>` unless policy blocks.
-SourceGate does not unpack package contents, broadly scan source code, recursively gate all transitive dependencies, or perform runtime malware analysis. In install mode, normal package-manager behavior may execute lifecycle or build scripts after SourceGate allows the requested root package.
+SourceGate 1.0 gates only the requested root package. It does not unpack package contents, broadly scan source code, recursively gate all transitive dependencies, or perform runtime malware analysis. In install mode, normal package-manager behavior may execute lifecycle or build scripts after SourceGate allows the requested root package.
 PyPI install-target provenance inspection may run local `python -m pip debug --verbose` only to discover compatible tags.
 
 ## Runtime Flow

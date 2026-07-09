@@ -98,7 +98,7 @@ Complete grouped configs from earlier versions are still accepted. Unknown field
 | `artifact_safety` | Artifact unsafe path, file-count, uncompressed-size, and expansion-ratio checks. |
 | `artifact_behavior` | Artifact execution-surface, suspicious file-type, behavior-indicator, general risk, and artifact-delta checks. |
 
-Artifact groups only produce findings when the command runs with `--mode artifact` or `--mode install`.
+Artifact groups only produce findings when the command runs with `--mode artifact` or `--mode install`. Default metadata mode intentionally does not download artifacts, even when artifact groups are configured; SourceGate prints a warning in that case so the skipped artifact checks are visible.
 
 ## Checked-In Balanced Config
 
@@ -277,11 +277,14 @@ Enable artifact behavior alerts:
 }
 ```
 
-Run artifact policy with:
+Run artifact policy with either artifact mode or install mode:
 
 ```bash
 sourcegate --mode artifact npm install lodash
+sourcegate --mode install npm install lodash
 ```
+
+Use `--mode artifact` for deeper verified artifact inspection without installing. Use `--mode install` when SourceGate should run the same root-artifact gate and then invoke the real package-manager install only if policy does not block.
 
 ## Check Overrides
 

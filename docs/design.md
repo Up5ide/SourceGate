@@ -1,6 +1,6 @@
 # SourceGate Design
 
-SourceGate is a pre-install security gate for package-install-shaped commands. It accepts npm and pip install commands with optional exact package versions, fetches public registry metadata, runs deterministic policy checks, optionally downloads and archive-inspects one verified install-target artifact, renders human-readable, full JSON, or compact report JSON output, and can run the real package-manager install in `--mode install` when policy does not block.
+SourceGate is a root-package pre-install security gate for package-install-shaped commands. It accepts npm and pip install commands with optional exact package versions, fetches public registry metadata, runs deterministic policy checks, optionally downloads and archive-inspects one verified install-target artifact, renders human-readable, full JSON, or compact report JSON output, and can run the real package-manager install in `--mode install` when policy does not block.
 
 ## Runtime Flow
 
@@ -19,7 +19,7 @@ The high-level flow is:
 11. `internal/output` renders human output, the full structured JSON envelope, or the compact deterministic report JSON.
 12. `cmd/sourcegate` exits with a deterministic CI status code based on the highest finding severity, or operational code `2` when the package-manager install fails or times out.
 
-Metadata and artifact modes do not invoke `npm`, `pip`, package installation, or package lifecycle hooks. Install mode delegates to normal package-manager behavior after policy allows the requested root package. PyPI install-target provenance inspection may run local `<python> -m pip debug --verbose` to resolve compatibility tags.
+Metadata and artifact modes do not invoke `npm`, `pip`, package installation, or package lifecycle hooks. Install mode delegates to normal package-manager behavior after policy allows the requested root package, including package-manager resolution of transitive dependencies. PyPI install-target provenance inspection may run local `<python> -m pip debug --verbose` to resolve compatibility tags.
 
 ## Package Layout
 
@@ -92,7 +92,7 @@ Unversioned requests preserve the original behavior and inspect the registry lat
 - npm accepts `<package>@<semver>` and scoped packages such as `@scope/pkg@1.2.3`.
 - PyPI accepts `<package>==<pep440-version>`.
 - Missing requested versions are hard errors; SourceGate does not fall back to latest.
-- Ranges, npm dist-tags, extras, compound PyPI specifiers, lockfiles, and dependency resolution are out of scope.
+- Ranges, npm dist-tags, extras, compound PyPI specifiers, multiple packages, package-manager flags after `npm` or `pip`, lockfiles, requirements files, global installs, editable installs, private registry/auth flows, and dependency resolution are out of scope.
 
 ## Configuration And Policy Tiers
 
@@ -141,7 +141,7 @@ Individual check packages determine whether a condition matches and provide the 
 
 ## Artifact Download Inspection
 
-Default commands currently run in metadata mode. `--mode artifact` and `--mode install` select the npm tarball or the highest-priority compatible non-yanked PyPI wheel, falling back to a non-yanked sdist. Metadata `BLOCK` findings skip download and archive inspection.
+Default commands currently run in metadata mode for speed and safety. Metadata mode never downloads artifacts, even when artifact policy is configured; in that case output includes a warning that artifact checks are enabled by policy but did not run because the command used metadata mode. `--mode artifact` and `--mode install` select the npm tarball or the highest-priority compatible non-yanked PyPI wheel, falling back to a non-yanked sdist. Metadata `BLOCK` findings skip download and archive inspection.
 
 Downloads stream to a mode-`0600` OS temporary file, are limited to 100 MiB, require a trusted SHA-256 or SHA-512 registry digest, and verify any available expected size. Missing or mismatched verification data is an operational error.
 
