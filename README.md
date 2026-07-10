@@ -136,6 +136,7 @@ The current version does not extract package contents, scan source code broadly,
 
 ## Documentation
 
+- [Security Policy](SECURITY.md)
 - [Configuration](docs/configuration.md)
 - [Configuration Questionnaire](docs/config-questionnaire.md)
 - [Design](docs/design.md)
