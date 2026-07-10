@@ -40,7 +40,7 @@ Configuration has three layers:
 Policy has three tiers:
 
 - `inform`: low-noise visibility.
-- `alert`: warning-level findings.
+- `alert`: attention-recommended findings. Alerts do not block installs unless the same condition is configured at the `block` tier.
 - `block`: block-level findings, decision `BLOCK`, and exit code `30`.
 
 Checks evaluate from strongest to weakest: `block`, then `alert`, then `inform`. If the same check matches multiple tiers, only the strongest finding is reported. This lets one rule appear in multiple tiers with different thresholds.

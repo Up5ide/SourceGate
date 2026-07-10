@@ -81,7 +81,7 @@ Exit codes are:
 
 - `0`: no policy findings.
 - `10`: highest finding severity is `INFORM`.
-- `20`: highest finding severity is `ALERT`.
+- `20`: highest finding severity is `ALERT`; attention is recommended, but policy did not block.
 - `30`: highest finding severity is `BLOCK`.
 - `2`: usage, configuration, registry, network, parse, package-manager install failure, timeout, or other operational errors.
 
@@ -110,7 +110,7 @@ The policy model has three tiers:
 
 `internal/checks` evaluates tiers from strongest to weakest for each check: `block`, then `alert`, then `inform`. If the same check matches multiple tiers, only the strongest matching tier is reported for that check. Archive safety and execution-surface checks run only after successful artifact-mode archive inspection.
 
-The `block` tier sets the report decision to `BLOCK` and exits with code `30`. In install mode, `BLOCK` skips the real package-manager install.
+The `alert` tier reports attention-recommended findings without changing an `ALLOW` decision to `BLOCK`. The `block` tier sets the report decision to `BLOCK` and exits with code `30`. In install mode, `BLOCK` skips the real package-manager install.
 
 Config also influences adapter fetch behavior. `internal/app` asks `internal/checks` for policy-derived adapter requirements before constructing adapters:
 

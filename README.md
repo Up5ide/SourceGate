@@ -1,10 +1,10 @@
 # SourceGate
 
-SourceGate is a security-first Go CLI and root-package pre-install gate for npm and PyPI package installs.
+SourceGate is a security-first Go CLI that checks npm and PyPI package installs before trust is granted.
 
 It accepts a narrow install-shaped command, fetches public registry metadata, evaluates deterministic policy checks, can verify and inspect one selected root package artifact, and in `--mode install` runs the real package-manager install only when policy does not block.
 
-SourceGate 1.0 gates the requested root package. Transitive dependencies are still resolved and installed by `npm` or `pip`, and deeper transitive dependency gating is tracked as future work.
+SourceGate 1.0 gates only the requested root package. Transitive dependencies are still resolved and installed by `npm` or `pip`, and deeper transitive dependency gating is tracked as future work.
 
 ## Quick Start
 
@@ -18,35 +18,72 @@ SourceGate requires Go 1.25.12 or newer.
 
 Do not tag `v1.0.0` until the v1.0 blocker issues are closed. During development, use a local build or the current checked-out source instead.
 
-First-run commands:
+Run a metadata-only check first:
 
 ```bash
-# Metadata inspection only. This is the default and does not install anything.
-sourcegate npm install lodash
+sourcegate --preset balanced npm install lodash
+```
 
-# Verified root-artifact inspection. This downloads and inspects one artifact, then exits.
-sourcegate --mode artifact npm install lodash
+Run deeper verified artifact inspection without installing:
 
-# Real root-package install gate. This installs only if metadata and artifact policy allow it.
-sourcegate --mode install npm install lodash@4.17.21
+```bash
+sourcegate --preset balanced --mode artifact npm install lodash
+```
 
-# Validate and explain the active configuration without registry access.
+Run the real gated install path:
+
+```bash
+sourcegate --preset balanced --mode install npm install lodash@4.17.21
+```
+
+Generate a compact automation report:
+
+```bash
+sourcegate --preset balanced --format report npm install lodash
+```
+
+Validate and inspect the active configuration without registry access:
+
+```bash
 sourcegate config test
 sourcegate config explain
-
-# Compact deterministic JSON report for tools, CI, IDEs, and AI agents.
-sourcegate --format report npm install lodash
 ```
+
+## Safety Boundary
+
+SourceGate 1.0 intentionally supports a narrow command surface so the result is clear:
+
+- It gates the one root package named in the command.
+- It supports public npm and PyPI registry metadata.
+- It can inspect one verified root artifact in artifact and install modes.
+- It does not recursively gate transitive dependencies.
+- It does not support lockfiles, requirements files, private registries, local paths, Git URLs, package-manager flags after `npm` or `pip`, or multiple packages in one command.
+
+Treat unsupported workflows as roadmap items, not hidden supported behavior.
 
 ## Modes
 
-`--mode metadata` is the default. It fetches public registry metadata, evaluates metadata policy, prints the decision, and never downloads artifacts or installs packages.
-
-`--mode artifact` runs metadata checks first. If metadata policy does not block, SourceGate downloads one preferred install-target artifact into an OS temporary file, verifies its registry digest, inspects archive safety metadata, bounded install/build metadata, native/executable file type signals, general path/manifest risk signals, bounded suspicious behavior indicators, and optional previous-artifact deltas without extraction, then deletes temporary artifacts before exit.
-
-`--mode install` runs the same metadata and verified root-artifact gate. If metadata or artifact policy produces `BLOCK`, SourceGate skips the package-manager install and exits with code `30`; otherwise it invokes `npm install <name>@<selected-version>` or `pip install <name>==<selected-version>` and records an install summary in human, JSON, and report output.
+| Mode | Installs packages? | What it does |
+| --- | --- | --- |
+| `metadata` | No | Fetches registry metadata, evaluates metadata policy, and prints a decision. This is the default. |
+| `artifact` | No | Runs metadata checks, then downloads, verifies, and inspects one selected root artifact if metadata policy does not block. |
+| `install` | Yes, only if allowed | Runs metadata and root-artifact checks, skips install on `BLOCK`, and otherwise invokes `npm install <name>@<version>` or `pip install <name>==<version>`. |
 
 If artifact policy is enabled but the command uses metadata mode, SourceGate prints a warning that artifact checks did not run. Use `--mode artifact` for deeper inspection without installing, or `--mode install` for the real gated install path.
+
+## Reading Results
+
+Human output includes the evaluation mode, selected package version, policy findings, and final decision.
+
+Decision and severity are related but not identical:
+
+- `ALLOW` means no configured `BLOCK` policy matched.
+- `BLOCK` means SourceGate found a block-level policy finding.
+- `INFORM` is low-noise visibility.
+- `ALERT` means attention is recommended, but the install is not blocked unless the matching policy is configured at the `block` tier.
+- `BLOCK` is the hard stop and exits with code `30`.
+
+Exit codes are `0` clean, `10` inform, `20` alert, `30` block, and `2` operational error. See [How To Read SourceGate Output](docs/output-guide.md) for examples and [CI Usage](docs/ci-usage.md) for automation patterns.
 
 ## Supported Command Shapes
 
@@ -86,22 +123,26 @@ SourceGate 1.0 intentionally rejects package-manager workflows it cannot gate cl
 - `pnpm`, `yarn`, `uv`, `poetry`, and other package-manager workflows.
 - Private registry and authenticated registry workflows.
 
-Treat unsupported workflows as roadmap items, not hidden supported behavior.
+## Configuration
 
-## Mission
+SourceGate policy is explicit and override-only. If a policy group or check is not present in the active config, it is disabled.
 
-Modern software depends on public package registries. Package managers generally assume trust by default: they resolve, download, install, and often execute install-time hooks.
+Use presets directly:
 
-SourceGate exists to add an explicit inspection step before that trust is granted.
+```bash
+sourcegate --preset balanced npm install lodash
+sourcegate --preset strict --mode artifact pip install requests
+```
 
-The project aims to:
+Generate and validate a local config:
 
-- Inspect dependency risk before installation.
-- Support multiple package ecosystems through adapters.
-- Make risk findings explainable.
-- Prefer deterministic rules over opaque scoring.
-- Provide local-first behavior with no cloud dependency required.
-- Enforce policy for supported root-package install commands.
+```bash
+sourcegate config preset balanced > sourcegate.config.json
+sourcegate config test
+sourcegate --print-config
+```
+
+See [Configuration](docs/configuration.md) for groups, check overrides, presets, and PyPI runtime targeting.
 
 ## Current Support
 
@@ -118,33 +159,27 @@ Supported behavior:
 - Identify the target ecosystem.
 - Extract the requested package name and optional exact version.
 - Query the relevant public registry.
-- Read override-only grouped policy from relaxed file config, explicit presets, or strict embedded config. Relaxed builds read `sourcegate.config.json` by default and support `--config <path>`; `--preset minimal|balanced|strict` uses a hard-coded preset for one run; embedded builds use the compiled-in config and reject external config paths.
+- Read override-only grouped policy from relaxed file config, explicit presets, or strict embedded config.
 - Validate and explain configuration with `sourcegate config test`, `sourcegate config explain`, and `sourcegate config preset <name>`.
-- Print CLI help, version/build/config-mode information, and JSON config status with `--help`, `--version`, and `--print-config`.
 - Emit tiered policy findings for release timing, package history, package names, npm lifecycle metadata, npm dependency/source/publisher metadata, private package public-registry matches, and PyPI artifact/provenance metadata.
-- Emit human-readable output, full structured JSON, or a compact deterministic report JSON.
-- Return CI-friendly exit codes: `0` clean, `10` inform, `20` alert, `30` block, and `2` operational error.
-- Append a human-readable policy evaluation trace when `--debug` is provided before the package manager.
-- Check PyPI provenance for install-target artifacts by default when the configured policy requires provenance.
-- Print a warning and mark install-target provenance indeterminate when Python compatibility-tag inspection fails, without guessing compatible wheels.
-- With `--mode artifact`, download one preferred install-target artifact to a temporary file, enforce a 100 MiB limit, verify its registry digest, inspect archive inventory, hard archive safety issues, bounded install/build execution-surface metadata, suspicious native/executable file type signals, general path/manifest risk signals, bounded suspicious behavior indicators, and policy-enabled previous-artifact deltas, report the result, and delete temporary files.
-- With `--mode install`, run metadata and root-artifact checks, skip install on `BLOCK`, and otherwise invoke `npm install <name>@<selected-version>` or `pip install <name>==<selected-version>`.
-- Preserve SourceGate policy exit codes after successful installs: `10` for `INFORM`, `20` for `ALERT`, and `30` for blocked installs that were skipped.
-- Print `Mode: metadata|artifact|install` in human output and include evaluation mode and install summary data in JSON and report output. If artifact policy is enabled but the command uses metadata mode, SourceGate prints a warning because artifact checks did not run.
-- Warn that install mode gates only the requested root package; transitive dependencies are still resolved by the package manager.
-- PyPI install-target provenance inspection may run local `<python> -m pip debug --verbose` to discover compatibility tags.
+- Emit human-readable output, full structured JSON, or compact deterministic report JSON.
+- Return CI-friendly exit codes.
+- With `--mode artifact`, download one preferred install-target artifact, verify its registry digest, inspect archive metadata and bounded behavior signals without extraction, report the result, and delete temporary files.
+- With `--mode install`, run metadata and root-artifact checks, skip install on `BLOCK`, and otherwise invoke the real package manager with an exact selected package spec.
 
 The current version does not extract package contents, scan source code broadly, recursively gate all transitive dependencies, or perform runtime malware analysis. Archive inspection reads headers, bounded package metadata, path inventory, small file prefixes for native/executable magic signatures, general path/manifest signals, and capped text/source files for high-confidence suspicious behavior indicators only.
 
 ## Documentation
 
-- [Security Policy](SECURITY.md)
+- [How To Read SourceGate Output](docs/output-guide.md)
+- [CI Usage](docs/ci-usage.md)
 - [Configuration](docs/configuration.md)
 - [Configuration Questionnaire](docs/config-questionnaire.md)
 - [Design](docs/design.md)
 - [Attack Vectors](docs/attack-vectors.md)
 - [Live Registry Smoke Test](docs/live-registry-smoke-test.md)
 - [Companion Rules For AI Coding Tools](docs/companion-rules/README.md)
+- [Security Policy](SECURITY.md)
 
 ## Planned Next
 

@@ -40,7 +40,7 @@ PyPI install-target provenance inspection may run local `python -m pip debug --v
 - `internal/report/`: shared report and finding data model.
 - `internal/output/`: human and JSON output rendering.
 - `internal/versioning/`: npm and PyPI exact-version classification helpers.
-- `docs/`: human-readable design, configuration, attack-vector, and smoke-test documentation.
+- `docs/`: human-readable design, configuration, output-reading, CI usage, attack-vector, and smoke-test documentation.
 - `sourcegate.config.json`: default relaxed local policy configuration and source for the embedded config fixture.
 
 ## Policy Model
@@ -118,7 +118,7 @@ Exit codes:
 
 - `0`: no policy findings
 - `10`: highest finding is `INFORM`
-- `20`: highest finding is `ALERT`
+- `20`: highest finding is `ALERT`; attention is recommended, but policy did not block
 - `30`: highest finding is `BLOCK`
 - `2`: usage, config, registry, network, parse, or operational error
 
