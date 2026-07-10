@@ -14,6 +14,8 @@ For the 1.0 release, install SourceGate with Go:
 go install github.com/sourcegate/sourcegate/cmd/sourcegate@v1.0.0
 ```
 
+SourceGate requires Go 1.25.12 or newer.
+
 Do not tag `v1.0.0` until the v1.0 blocker issues are closed. During development, use a local build or the current checked-out source instead.
 
 First-run commands:
@@ -168,6 +170,8 @@ It is a supply-chain risk gate. The goal is to inspect, explain, and enforce det
 ## Development
 
 SourceGate is written in Go.
+
+Use Go 1.25.12 or newer.
 
 ```bash
 go build ./cmd/sourcegate

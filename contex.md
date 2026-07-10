@@ -124,6 +124,7 @@ Exit codes:
 
 ## Development Notes
 
+SourceGate requires Go 1.25.12 or newer.
 Tests live beside the package they cover as `*_test.go`.
 Prefer extending existing packages and patterns over adding new abstractions.
 Checks should read from `report.PackageReport` and return findings; they should not perform registry requests or package-manager actions.
