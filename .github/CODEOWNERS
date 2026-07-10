@@ -1,0 +1,11 @@
+# Security-sensitive repository configuration.
+.github/workflows/** @Up5ide
+.github/dependabot.yml @Up5ide
+.github/CODEOWNERS @Up5ide
+SECURITY.md @Up5ide
+security-insights.yml @Up5ide
+
+# Release and provenance configuration.
+.github/workflows/*release* @Up5ide
+.github/workflows/*scorecard* @Up5ide
+.github/workflows/*osv* @Up5ide
